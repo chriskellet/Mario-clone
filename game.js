@@ -955,7 +955,7 @@ window.addEventListener('keyup', (e) => {
     gameState.keys[e.key] = false;
 });
 
-// Touch Controls
+// Touch Controls - Position-based tracking
 function setupTouchControls() {
     const leftBtn = document.getElementById('btn-left');
     const rightBtn = document.getElementById('btn-right');
@@ -966,78 +966,94 @@ function setupTouchControls() {
         btn.addEventListener('contextmenu', e => e.preventDefault());
     });
 
-    // Helper to clear all controls (fixes stuck controls)
-    const clearAllControls = () => {
+    // Track which button a touch is currently over
+    function getTouchedButton(touch) {
+        const element = document.elementFromPoint(touch.clientX, touch.clientY);
+        if (!element) return null;
+
+        if (element === leftBtn || element.closest('#btn-left')) return 'left';
+        if (element === rightBtn || element.closest('#btn-right')) return 'right';
+        if (element === jumpBtn || element.closest('#btn-jump')) return 'jump';
+        return null;
+    }
+
+    // Update control states based on all active touches
+    function updateControls(touches) {
+        // Reset all controls
         gameState.touchControls.left = false;
         gameState.touchControls.right = false;
         gameState.touchControls.jump = false;
-    };
 
-    // Left button
-    leftBtn.addEventListener('touchstart', (e) => {
+        // Check each active touch and set corresponding control
+        for (let i = 0; i < touches.length; i++) {
+            const button = getTouchedButton(touches[i]);
+            if (button === 'left') gameState.touchControls.left = true;
+            if (button === 'right') gameState.touchControls.right = true;
+            if (button === 'jump') gameState.touchControls.jump = true;
+        }
+    }
+
+    // Handle touch events on the entire document to track position changes
+    document.addEventListener('touchstart', (e) => {
         e.preventDefault();
-        gameState.touchControls.left = true;
-    });
-    leftBtn.addEventListener('touchend', (e) => {
+        updateControls(e.touches);
+    }, { passive: false });
+
+    document.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        updateControls(e.touches);
+    }, { passive: false });
+
+    document.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        updateControls(e.touches);
+    }, { passive: false });
+
+    document.addEventListener('touchcancel', (e) => {
         e.preventDefault();
         gameState.touchControls.left = false;
-    });
-    leftBtn.addEventListener('touchcancel', (e) => {
-        e.preventDefault();
-        gameState.touchControls.left = false;
-    });
-
-    // Right button
-    rightBtn.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        gameState.touchControls.right = true;
-    });
-    rightBtn.addEventListener('touchend', (e) => {
-        e.preventDefault();
         gameState.touchControls.right = false;
-    });
-    rightBtn.addEventListener('touchcancel', (e) => {
-        e.preventDefault();
-        gameState.touchControls.right = false;
-    });
-
-    // Jump button
-    jumpBtn.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        gameState.touchControls.jump = true;
-    });
-    jumpBtn.addEventListener('touchend', (e) => {
-        e.preventDefault();
         gameState.touchControls.jump = false;
-    });
-    jumpBtn.addEventListener('touchcancel', (e) => {
-        e.preventDefault();
-        gameState.touchControls.jump = false;
-    });
-
-    // Global touchend/touchcancel as safety net
-    document.addEventListener('touchend', () => {
-        // Small delay to allow specific button handlers to fire first
-        setTimeout(() => {
-            // Only clear if no touches are active
-            if (!document.querySelector(':active')) {
-                clearAllControls();
-            }
-        }, 50);
-    });
-
-    document.addEventListener('touchcancel', clearAllControls);
+    }, { passive: false });
 
     // Mouse support for testing
-    leftBtn.addEventListener('mousedown', () => gameState.touchControls.left = true);
-    leftBtn.addEventListener('mouseup', () => gameState.touchControls.left = false);
-    leftBtn.addEventListener('mouseleave', () => gameState.touchControls.left = false);
-    rightBtn.addEventListener('mousedown', () => gameState.touchControls.right = true);
-    rightBtn.addEventListener('mouseup', () => gameState.touchControls.right = false);
-    rightBtn.addEventListener('mouseleave', () => gameState.touchControls.right = false);
-    jumpBtn.addEventListener('mousedown', () => gameState.touchControls.jump = true);
-    jumpBtn.addEventListener('mouseup', () => gameState.touchControls.jump = false);
-    jumpBtn.addEventListener('mouseleave', () => gameState.touchControls.jump = false);
+    let mouseDown = false;
+
+    leftBtn.addEventListener('mousedown', () => {
+        mouseDown = true;
+        gameState.touchControls.left = true;
+    });
+    leftBtn.addEventListener('mouseup', () => {
+        mouseDown = false;
+        gameState.touchControls.left = false;
+    });
+    leftBtn.addEventListener('mouseleave', () => {
+        if (mouseDown) gameState.touchControls.left = false;
+    });
+
+    rightBtn.addEventListener('mousedown', () => {
+        mouseDown = true;
+        gameState.touchControls.right = true;
+    });
+    rightBtn.addEventListener('mouseup', () => {
+        mouseDown = false;
+        gameState.touchControls.right = false;
+    });
+    rightBtn.addEventListener('mouseleave', () => {
+        if (mouseDown) gameState.touchControls.right = false;
+    });
+
+    jumpBtn.addEventListener('mousedown', () => {
+        mouseDown = true;
+        gameState.touchControls.jump = true;
+    });
+    jumpBtn.addEventListener('mouseup', () => {
+        mouseDown = false;
+        gameState.touchControls.jump = false;
+    });
+    jumpBtn.addEventListener('mouseleave', () => {
+        if (mouseDown) gameState.touchControls.jump = false;
+    });
 }
 
 // Game Controls
