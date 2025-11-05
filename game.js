@@ -978,10 +978,17 @@ function setupTouchControls() {
         return null;
     }
 
-    // Check if touch is on a game control button
+    // Check if touch is on a game control button (not menu buttons)
     function isTouchOnControls(touch) {
         const element = document.elementFromPoint(touch.clientX, touch.clientY);
-        return element && element.closest('#touch-controls');
+        if (!element) return false;
+
+        // Don't interfere with menu buttons
+        if (element.closest('.screen') || element.closest('.menu-btn')) {
+            return false;
+        }
+
+        return element.closest('#touch-controls');
     }
 
     // Update control states based on all active touches
@@ -1070,22 +1077,36 @@ function setupTouchControls() {
 
 // Game Controls
 function startGame() {
-    gameState.running = true;
-    gameState.score = 0;
-    gameState.coins = 0;
-    gameState.lives = 3;
-    gameState.level = 1;
+    try {
+        console.log('startGame called');
 
-    document.getElementById('score').textContent = '0';
-    document.getElementById('coins').textContent = '0';
-    document.getElementById('lives').textContent = '3';
+        gameState.running = true;
+        gameState.score = 0;
+        gameState.coins = 0;
+        gameState.lives = 3;
+        gameState.level = 1;
 
-    document.getElementById('start-screen').classList.add('hidden');
-    document.getElementById('game-over-screen').classList.add('hidden');
+        document.getElementById('score').textContent = '0';
+        document.getElementById('coins').textContent = '0';
+        document.getElementById('lives').textContent = '3';
 
-    initClouds();
-    initLevel();
-    gameLoop();
+        document.getElementById('start-screen').classList.add('hidden');
+        document.getElementById('game-over-screen').classList.add('hidden');
+
+        console.log('Initializing clouds...');
+        initClouds();
+
+        console.log('Initializing level...');
+        initLevel();
+
+        console.log('Starting game loop...');
+        gameLoop();
+
+        console.log('Game started successfully!');
+    } catch (error) {
+        console.error('Error starting game:', error);
+        alert('Error starting game: ' + error.message);
+    }
 }
 
 function gameOver() {
@@ -1095,15 +1116,35 @@ function gameOver() {
 }
 
 // UI Event Listeners
-document.getElementById('start-btn').addEventListener('click', () => {
+function handleStartGame(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
     // Resume audio context on user interaction
     if (audioContext.state === 'suspended') {
         audioContext.resume();
     }
+
+    console.log('Starting game...');
+    startGame();
+}
+
+const startBtn = document.getElementById('start-btn');
+const restartBtn = document.getElementById('restart-btn');
+
+// Add both touch and click events for maximum compatibility
+startBtn.addEventListener('touchend', handleStartGame);
+startBtn.addEventListener('click', handleStartGame);
+
+restartBtn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('Restarting game...');
     startGame();
 });
-
-document.getElementById('restart-btn').addEventListener('click', () => {
+restartBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     startGame();
 });
 
