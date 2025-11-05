@@ -3,6 +3,8 @@ const CONFIG = {
     GRAVITY: 0.6,
     JUMP_POWER: -12,
     MOVE_SPEED: 5,
+    ACCELERATION: 0.5,
+    FRICTION: 0.85,
     MAX_FALL_SPEED: 15,
     PLAYER_SIZE: 40,
     ENEMY_SIZE: 35,
@@ -182,15 +184,26 @@ class Player {
     }
 
     update() {
-        // Horizontal movement
+        // Horizontal movement with momentum
         if (gameState.keys['ArrowLeft'] || gameState.touchControls.left) {
-            this.velocityX = -CONFIG.MOVE_SPEED;
+            this.velocityX -= CONFIG.ACCELERATION;
+            if (this.velocityX < -CONFIG.MOVE_SPEED) {
+                this.velocityX = -CONFIG.MOVE_SPEED;
+            }
             this.direction = -1;
         } else if (gameState.keys['ArrowRight'] || gameState.touchControls.right) {
-            this.velocityX = CONFIG.MOVE_SPEED;
+            this.velocityX += CONFIG.ACCELERATION;
+            if (this.velocityX > CONFIG.MOVE_SPEED) {
+                this.velocityX = CONFIG.MOVE_SPEED;
+            }
             this.direction = 1;
         } else {
-            this.velocityX = 0;
+            // Apply friction when no input
+            this.velocityX *= CONFIG.FRICTION;
+            // Stop completely if moving very slowly
+            if (Math.abs(this.velocityX) < 0.1) {
+                this.velocityX = 0;
+            }
         }
 
         // Jumping
