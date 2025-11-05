@@ -1,9 +1,9 @@
 // Game Configuration
 const CONFIG = {
     GRAVITY: 0.6,
-    JUMP_POWER: -10,  // Reduced from -12 for more balanced jumps
-    JUMP_HOLD_GRAVITY: 0.25,  // Slightly adjusted for smoother variable jump
-    MAX_JUMP_HOLD_TIME: 12,  // Reduced hold time for tighter control
+    JUMP_POWER: -8,  // Further reduced from -10 for smaller jumps
+    JUMP_HOLD_GRAVITY: 0.2,  // Reduced to make hold vs tap more subtle
+    MAX_JUMP_HOLD_TIME: 10,  // Reduced for tighter control
     MOVE_SPEED: 5,
     ACCELERATION: 0.5,
     FRICTION: 0.85,

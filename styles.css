@@ -52,43 +52,48 @@ body {
 }
 
 .control-btn {
-    width: 70px;
-    height: 70px;
-    border: none;
+    width: 90px;
+    height: 90px;
+    border: 3px solid rgba(255, 255, 255, 0.4);
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.9);
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2), inset 0 -3px 0 rgba(0, 0, 0, 0.1);
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
     cursor: pointer;
     transition: all 0.1s ease;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #333;
+    color: #fff;
     font-weight: bold;
-    font-size: 12px;
+    font-size: 14px;
     touch-action: manipulation;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
 .control-btn:active {
     transform: scale(0.95);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.1);
-    background: rgba(255, 255, 255, 1);
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.6);
 }
 
 .direction-btn svg {
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
 }
 
 .action-btn {
-    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
+    background: rgba(255, 107, 107, 0.25);
+    border: 3px solid rgba(255, 107, 107, 0.5);
     color: white;
-    width: 80px;
-    height: 80px;
+    width: 100px;
+    height: 100px;
 }
 
 .action-btn:active {
-    background: linear-gradient(135deg, #ee5a6f 0%, #ff6b6b 100%);
+    background: rgba(255, 107, 107, 0.4);
+    border-color: rgba(255, 107, 107, 0.7);
 }
 
 #game-ui {
@@ -182,13 +187,18 @@ body {
 
 @media (max-width: 480px) {
     .control-btn {
-        width: 60px;
-        height: 60px;
+        width: 80px;
+        height: 80px;
     }
 
     .action-btn {
-        width: 70px;
-        height: 70px;
+        width: 90px;
+        height: 90px;
+    }
+
+    .direction-btn svg {
+        width: 36px;
+        height: 36px;
     }
 
     #game-ui {
