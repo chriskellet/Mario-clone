@@ -100,6 +100,41 @@ function screenShake(intensity, duration) {
     gameState.screenShake.duration = duration;
 }
 
+// Haptic Feedback System
+const haptics = {
+    supported: 'vibrate' in navigator,
+
+    light: () => {
+        if (haptics.supported) {
+            navigator.vibrate(10);  // Very short, light tap
+        }
+    },
+
+    medium: () => {
+        if (haptics.supported) {
+            navigator.vibrate(25);  // Medium tap
+        }
+    },
+
+    heavy: () => {
+        if (haptics.supported) {
+            navigator.vibrate(50);  // Strong impact
+        }
+    },
+
+    success: () => {
+        if (haptics.supported) {
+            navigator.vibrate([10, 30, 20]);  // Two quick taps
+        }
+    },
+
+    error: () => {
+        if (haptics.supported) {
+            navigator.vibrate([30, 50, 30]);  // Buzz pattern
+        }
+    }
+};
+
 // Canvas Setup
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
@@ -180,6 +215,7 @@ class Player {
         this.velocityX = 0;
         this.velocityY = 0;
         this.onGround = false;
+        this.wasOnGround = false;
         this.direction = 1;
         this.jumpCount = 0;
         this.invulnerable = false;
@@ -221,6 +257,7 @@ class Player {
             this.jumpTime = 0;
             sounds.jump();
             createJumpDust(this.x + this.width / 2, this.y + this.height);
+            haptics.light();  // Light haptic on jump
         }
 
         // Variable jump height - hold button for higher jump
@@ -250,6 +287,9 @@ class Player {
         if (this.x < 0) this.x = 0;
         if (this.x + this.width > CONFIG.WORLD_WIDTH) this.x = CONFIG.WORLD_WIDTH - this.width;
 
+        // Store previous ground state
+        this.wasOnGround = this.onGround;
+
         // Reset onGround flag
         this.onGround = false;
 
@@ -271,6 +311,11 @@ class Player {
                 }
             }
         });
+
+        // Detect landing - trigger haptic when transitioning from air to ground
+        if (this.onGround && !this.wasOnGround) {
+            haptics.medium();  // Medium haptic on landing
+        }
 
         // Update camera to follow player
         updateCamera();
@@ -359,6 +404,7 @@ class Player {
         gameState.lives--;
         document.getElementById('lives').textContent = gameState.lives;
         sounds.die();
+        haptics.error();  // Error pattern when taking damage
 
         if (gameState.lives <= 0) {
             gameOver();
@@ -469,6 +515,7 @@ class Enemy {
                 sounds.stomp();
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 12, '#8B4513');
                 screenShake(3, 10);
+                haptics.heavy();  // Heavy haptic for stomping enemy
             } else {
                 // Enemy hit player from side or below
                 player.hit();
@@ -569,6 +616,7 @@ class Coin {
             document.getElementById('score').textContent = gameState.score;
             sounds.coin();
             createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, '#FFD700');
+            haptics.success();  // Success pattern for coin collection
         }
     }
 
