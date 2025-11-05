@@ -8,6 +8,8 @@ const CONFIG = {
     ENEMY_SIZE: 35,
     COIN_SIZE: 25,
     BLOCK_SIZE: 40,
+    WORLD_WIDTH: 3000,  // Large scrollable world
+    WORLD_HEIGHT: 600,  // Fixed world height
 };
 
 // Game State
@@ -19,6 +21,7 @@ const gameState = {
     level: 1,
     keys: {},
     touchControls: { left: false, right: false, jump: false },
+    camera: { x: 0, y: 0 },
 };
 
 // Canvas Setup
@@ -136,13 +139,17 @@ class Player {
         this.x += this.velocityX;
         this.y += this.velocityY;
 
-        // Keep player on screen
+        // Keep player in world bounds
         if (this.x < 0) this.x = 0;
-        if (this.x + this.width > canvas.width) this.x = canvas.width - this.width;
+        if (this.x + this.width > CONFIG.WORLD_WIDTH) this.x = CONFIG.WORLD_WIDTH - this.width;
+
+        // Reset onGround flag
+        this.onGround = false;
 
         // Ground collision
-        if (this.y + this.height >= canvas.height - 50) {
-            this.y = canvas.height - 50 - this.height;
+        const groundY = CONFIG.WORLD_HEIGHT - 50;
+        if (this.y + this.height >= groundY) {
+            this.y = groundY - this.height;
             this.velocityY = 0;
             this.onGround = true;
         }
@@ -157,6 +164,9 @@ class Player {
                 }
             }
         });
+
+        // Update camera to follow player
+        updateCamera();
     }
 
     checkCollision(obj) {
@@ -169,61 +179,69 @@ class Player {
     draw() {
         ctx.save();
 
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        // Blinking effect when invulnerable
+        if (this.invulnerable && Math.floor(Date.now() / 100) % 2 === 0) {
+            ctx.globalAlpha = 0.5;
+        }
+
         // Shadow
         ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
         ctx.beginPath();
-        ctx.ellipse(this.x + this.width / 2, this.y + this.height + 5, this.width / 2.5, 5, 0, 0, Math.PI * 2);
+        ctx.ellipse(screenX + this.width / 2, screenY + this.height + 5, this.width / 2.5, 5, 0, 0, Math.PI * 2);
         ctx.fill();
 
         // Body (red shirt)
         ctx.fillStyle = '#E52521';
         ctx.beginPath();
-        ctx.roundRect(this.x + 5, this.y + 20, this.width - 10, this.height - 30, 5);
+        ctx.roundRect(screenX + 5, screenY + 20, this.width - 10, this.height - 30, 5);
         ctx.fill();
 
         // Overalls (blue)
         ctx.fillStyle = '#2B5FD9';
-        ctx.fillRect(this.x + 8, this.y + 25, this.width - 16, this.height - 35);
+        ctx.fillRect(screenX + 8, screenY + 25, this.width - 16, this.height - 35);
 
         // Head (skin color)
         ctx.fillStyle = '#FFD1A1';
         ctx.beginPath();
-        ctx.arc(this.x + this.width / 2, this.y + 12, 12, 0, Math.PI * 2);
+        ctx.arc(screenX + this.width / 2, screenY + 12, 12, 0, Math.PI * 2);
         ctx.fill();
 
         // Hat (red)
         ctx.fillStyle = '#E52521';
         ctx.beginPath();
-        ctx.ellipse(this.x + this.width / 2, this.y + 8, 14, 8, 0, Math.PI, 2 * Math.PI);
+        ctx.ellipse(screenX + this.width / 2, screenY + 8, 14, 8, 0, Math.PI, 2 * Math.PI);
         ctx.fill();
-        ctx.fillRect(this.x + this.width / 2 - 8, this.y + 4, 16, 6);
+        ctx.fillRect(screenX + this.width / 2 - 8, screenY + 4, 16, 6);
 
         // Hat logo (M)
         ctx.fillStyle = 'white';
         ctx.font = 'bold 8px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText('M', this.x + this.width / 2, this.y + 9);
+        ctx.fillText('M', screenX + this.width / 2, screenY + 9);
 
         // Eyes
         ctx.fillStyle = 'black';
         const eyeOffset = this.direction > 0 ? 2 : -2;
-        ctx.fillRect(this.x + this.width / 2 - 3 + eyeOffset, this.y + 13, 2, 2);
-        ctx.fillRect(this.x + this.width / 2 + 3 + eyeOffset, this.y + 13, 2, 2);
+        ctx.fillRect(screenX + this.width / 2 - 3 + eyeOffset, screenY + 13, 2, 2);
+        ctx.fillRect(screenX + this.width / 2 + 3 + eyeOffset, screenY + 13, 2, 2);
 
         // Mustache
         ctx.fillStyle = '#5C3C1C';
-        ctx.fillRect(this.x + this.width / 2 - 6, this.y + 17, 12, 3);
+        ctx.fillRect(screenX + this.width / 2 - 6, screenY + 17, 12, 3);
 
         // Buttons
         ctx.fillStyle = '#FFD700';
         ctx.beginPath();
-        ctx.arc(this.x + this.width / 2, this.y + 30, 2, 0, Math.PI * 2);
+        ctx.arc(screenX + this.width / 2, screenY + 30, 2, 0, Math.PI * 2);
         ctx.fill();
 
         // Shoes (brown)
         ctx.fillStyle = '#5C3C1C';
-        ctx.fillRect(this.x + 5, this.y + this.height - 8, 12, 8);
-        ctx.fillRect(this.x + this.width - 17, this.y + this.height - 8, 12, 8);
+        ctx.fillRect(screenX + 5, screenY + this.height - 8, 12, 8);
+        ctx.fillRect(screenX + this.width - 17, screenY + this.height - 8, 12, 8);
 
         ctx.restore();
     }
@@ -254,30 +272,106 @@ class Enemy {
         this.width = CONFIG.ENEMY_SIZE;
         this.height = CONFIG.ENEMY_SIZE;
         this.velocityX = -2;
+        this.velocityY = 0;
         this.alive = true;
+        this.onGround = false;
     }
 
     update() {
-        this.x += this.velocityX;
+        if (!this.alive) return;
 
-        if (this.x < 0 || this.x + this.width > canvas.width) {
+        // Apply gravity
+        this.velocityY += CONFIG.GRAVITY;
+        if (this.velocityY > CONFIG.MAX_FALL_SPEED) {
+            this.velocityY = CONFIG.MAX_FALL_SPEED;
+        }
+
+        // Horizontal movement
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        // Reset onGround flag
+        this.onGround = false;
+
+        // World bounds - reverse direction at edges
+        if (this.x < 0) {
+            this.x = 0;
             this.velocityX *= -1;
+        }
+        if (this.x + this.width > CONFIG.WORLD_WIDTH) {
+            this.x = CONFIG.WORLD_WIDTH - this.width;
+            this.velocityX *= -1;
+        }
+
+        // Ground collision
+        const groundY = CONFIG.WORLD_HEIGHT - 50;
+        if (this.y + this.height >= groundY) {
+            this.y = groundY - this.height;
+            this.velocityY = 0;
+            this.onGround = true;
+        }
+
+        // Platform collisions
+        platforms.forEach(platform => {
+            if (this.checkCollision(platform)) {
+                // Landing on platform from above
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= platform.y) {
+                    this.y = platform.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                }
+                // Hitting platform from side - reverse direction
+                else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
+        // Reverse direction if at edge of platform
+        if (this.onGround) {
+            const checkX = this.velocityX > 0 ? this.x + this.width + 5 : this.x - 5;
+            const checkY = this.y + this.height + 10;
+            let onPlatform = false;
+
+            // Check if there's ground ahead
+            if (checkY >= groundY) {
+                onPlatform = true;
+            } else {
+                platforms.forEach(platform => {
+                    if (checkX >= platform.x && checkX <= platform.x + platform.width &&
+                        checkY >= platform.y && checkY <= platform.y + platform.height) {
+                        onPlatform = true;
+                    }
+                });
+            }
+
+            if (!onPlatform) {
+                this.velocityX *= -1;
+            }
         }
 
         // Check collision with player
         if (this.alive && player.checkCollision(this)) {
-            if (player.velocityY > 0 && player.y + player.height - player.velocityY <= this.y + 10) {
+            // Check if player is stomping enemy (coming from above)
+            if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
                 // Player jumped on enemy
                 this.alive = false;
                 player.velocityY = -8;
                 gameState.score += 100;
                 document.getElementById('score').textContent = gameState.score;
                 sounds.stomp();
-            } else if (!player.invulnerable) {
-                // Enemy hit player
+            } else {
+                // Enemy hit player from side or below
                 player.hit();
             }
         }
+    }
+
+    checkCollision(obj) {
+        return this.x < obj.x + obj.width &&
+               this.x + this.width > obj.x &&
+               this.y < obj.y + obj.height &&
+               this.y + this.height > obj.y;
     }
 
     draw() {
@@ -285,57 +379,60 @@ class Enemy {
 
         ctx.save();
 
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
         // Shadow
         ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
         ctx.beginPath();
-        ctx.ellipse(this.x + this.width / 2, this.y + this.height + 3, this.width / 2.5, 4, 0, 0, Math.PI * 2);
+        ctx.ellipse(screenX + this.width / 2, screenY + this.height + 3, this.width / 2.5, 4, 0, 0, Math.PI * 2);
         ctx.fill();
 
         // Body (brown mushroom)
         ctx.fillStyle = '#8B4513';
         ctx.beginPath();
-        ctx.arc(this.x + this.width / 2, this.y + this.height / 3, this.width / 2.2, 0, Math.PI, true);
+        ctx.arc(screenX + this.width / 2, screenY + this.height / 3, this.width / 2.2, 0, Math.PI, true);
         ctx.fill();
 
         ctx.fillStyle = '#D2691E';
         ctx.beginPath();
-        ctx.arc(this.x + this.width / 2, this.y + this.height / 3, this.width / 2.2, 0, Math.PI);
+        ctx.arc(screenX + this.width / 2, screenY + this.height / 3, this.width / 2.2, 0, Math.PI);
         ctx.fill();
 
         // Spots
         ctx.fillStyle = 'white';
         ctx.beginPath();
-        ctx.arc(this.x + this.width / 2 - 8, this.y + 8, 4, 0, Math.PI * 2);
+        ctx.arc(screenX + this.width / 2 - 8, screenY + 8, 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(this.x + this.width / 2 + 8, this.y + 8, 4, 0, Math.PI * 2);
+        ctx.arc(screenX + this.width / 2 + 8, screenY + 8, 4, 0, Math.PI * 2);
         ctx.fill();
 
         // Stem
         ctx.fillStyle = '#FFE4B5';
-        ctx.fillRect(this.x + this.width / 2 - 6, this.y + this.height / 3, 12, this.height / 1.5);
+        ctx.fillRect(screenX + this.width / 2 - 6, screenY + this.height / 3, 12, this.height / 1.5);
 
         // Eyes (angry)
         ctx.fillStyle = 'black';
-        ctx.fillRect(this.x + this.width / 2 - 8, this.y + this.height / 2, 4, 4);
-        ctx.fillRect(this.x + this.width / 2 + 4, this.y + this.height / 2, 4, 4);
+        ctx.fillRect(screenX + this.width / 2 - 8, screenY + this.height / 2, 4, 4);
+        ctx.fillRect(screenX + this.width / 2 + 4, screenY + this.height / 2, 4, 4);
 
         // Eyebrows (angry)
         ctx.strokeStyle = 'black';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(this.x + this.width / 2 - 10, this.y + this.height / 2 - 2);
-        ctx.lineTo(this.x + this.width / 2 - 4, this.y + this.height / 2 - 1);
+        ctx.moveTo(screenX + this.width / 2 - 10, screenY + this.height / 2 - 2);
+        ctx.lineTo(screenX + this.width / 2 - 4, screenY + this.height / 2 - 1);
         ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(this.x + this.width / 2 + 4, this.y + this.height / 2 - 1);
-        ctx.lineTo(this.x + this.width / 2 + 10, this.y + this.height / 2 - 2);
+        ctx.moveTo(screenX + this.width / 2 + 4, screenY + this.height / 2 - 1);
+        ctx.lineTo(screenX + this.width / 2 + 10, screenY + this.height / 2 - 2);
         ctx.stroke();
 
         // Feet
         ctx.fillStyle = '#8B4513';
-        ctx.fillRect(this.x + this.width / 2 - 10, this.y + this.height - 6, 7, 6);
-        ctx.fillRect(this.x + this.width / 2 + 3, this.y + this.height - 6, 7, 6);
+        ctx.fillRect(screenX + this.width / 2 - 10, screenY + this.height - 6, 7, 6);
+        ctx.fillRect(screenX + this.width / 2 + 3, screenY + this.height - 6, 7, 6);
 
         ctx.restore();
     }
@@ -369,7 +466,11 @@ class Coin {
         if (this.collected) return;
 
         ctx.save();
-        ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        ctx.translate(screenX + this.width / 2, screenY + this.height / 2);
         ctx.rotate(this.rotation);
 
         // Coin
@@ -406,9 +507,12 @@ class Platform {
     }
 
     draw() {
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
         // Brick texture
         ctx.fillStyle = '#D2691E';
-        ctx.fillRect(this.x, this.y, this.width, this.height);
+        ctx.fillRect(screenX, screenY, this.width, this.height);
 
         // Brick pattern
         ctx.strokeStyle = '#8B4513';
@@ -420,15 +524,15 @@ class Platform {
         for (let bx = 0; bx < this.width; bx += brickWidth) {
             for (let by = 0; by < this.height; by += brickHeight) {
                 const offset = (by / brickHeight) % 2 === 0 ? 0 : brickWidth / 2;
-                ctx.strokeRect(this.x + bx + offset, this.y + by, brickWidth, brickHeight);
+                ctx.strokeRect(screenX + bx + offset, screenY + by, brickWidth, brickHeight);
 
                 // Highlight
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-                ctx.fillRect(this.x + bx + offset + 2, this.y + by + 2, brickWidth - 4, 3);
+                ctx.fillRect(screenX + bx + offset + 2, screenY + by + 2, brickWidth - 4, 3);
 
                 // Shadow
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-                ctx.fillRect(this.x + bx + offset + 2, this.y + by + brickHeight - 5, brickWidth - 4, 3);
+                ctx.fillRect(screenX + bx + offset + 2, screenY + by + brickHeight - 5, brickWidth - 4, 3);
             }
         }
     }
@@ -440,27 +544,77 @@ let enemies = [];
 let coins = [];
 let platforms = [];
 
+// Camera system
+function updateCamera() {
+    // Center camera on player
+    gameState.camera.x = player.x - canvas.width / 2 + player.width / 2;
+    gameState.camera.y = player.y - canvas.height / 2 + player.height / 2;
+
+    // Keep camera within world bounds
+    gameState.camera.x = Math.max(0, Math.min(gameState.camera.x, CONFIG.WORLD_WIDTH - canvas.width));
+    gameState.camera.y = Math.max(0, Math.min(gameState.camera.y, CONFIG.WORLD_HEIGHT - canvas.height));
+}
+
 function initLevel() {
-    player = new Player(50, canvas.height - 150);
+    player = new Player(100, 100);
     enemies = [];
     coins = [];
     platforms = [];
+    gameState.camera = { x: 0, y: 0 };
 
-    // Create platforms
-    platforms.push(new Platform(200, canvas.height - 150, 200, 20));
-    platforms.push(new Platform(500, canvas.height - 250, 200, 20));
-    platforms.push(new Platform(100, canvas.height - 350, 150, 20));
-    platforms.push(new Platform(400, canvas.height - 400, 180, 20));
+    const groundY = CONFIG.WORLD_HEIGHT - 50;
 
-    // Create enemies
-    enemies.push(new Enemy(250, canvas.height - 190));
-    enemies.push(new Enemy(550, canvas.height - 290));
-    enemies.push(new Enemy(420, canvas.height - 440));
+    // Create a varied level with platforms at different heights
+    // Lower platforms
+    platforms.push(new Platform(300, groundY - 100, 200, 20));
+    platforms.push(new Platform(700, groundY - 120, 180, 20));
+    platforms.push(new Platform(1100, groundY - 90, 200, 20));
+    platforms.push(new Platform(1500, groundY - 150, 220, 20));
+    platforms.push(new Platform(1900, groundY - 100, 200, 20));
+    platforms.push(new Platform(2300, groundY - 130, 180, 20));
+    platforms.push(new Platform(2700, groundY - 110, 150, 20));
 
-    // Create coins
-    for (let i = 0; i < 8; i++) {
-        const x = 150 + i * 80;
-        const y = canvas.height - 200 - Math.random() * 200;
+    // Mid-level platforms
+    platforms.push(new Platform(200, groundY - 220, 150, 20));
+    platforms.push(new Platform(550, groundY - 250, 180, 20));
+    platforms.push(new Platform(950, groundY - 230, 160, 20));
+    platforms.push(new Platform(1300, groundY - 280, 200, 20));
+    platforms.push(new Platform(1700, groundY - 260, 180, 20));
+    platforms.push(new Platform(2100, groundY - 240, 150, 20));
+    platforms.push(new Platform(2500, groundY - 270, 170, 20));
+
+    // High platforms (for portrait mode and challenge)
+    platforms.push(new Platform(400, groundY - 360, 140, 20));
+    platforms.push(new Platform(800, groundY - 380, 160, 20));
+    platforms.push(new Platform(1200, groundY - 400, 150, 20));
+    platforms.push(new Platform(1600, groundY - 420, 180, 20));
+    platforms.push(new Platform(2000, groundY - 390, 140, 20));
+    platforms.push(new Platform(2400, groundY - 410, 160, 20));
+
+    // Create enemies on various platforms
+    enemies.push(new Enemy(350, groundY - 140));
+    enemies.push(new Enemy(750, groundY - 160));
+    enemies.push(new Enemy(250, groundY - 260));
+    enemies.push(new Enemy(600, groundY - 290));
+    enemies.push(new Enemy(1000, groundY - 270));
+    enemies.push(new Enemy(1350, groundY - 320));
+    enemies.push(new Enemy(1550, groundY - 190));
+    enemies.push(new Enemy(1950, groundY - 140));
+    enemies.push(new Enemy(2150, groundY - 280));
+    enemies.push(new Enemy(2550, groundY - 310));
+
+    // Create coins throughout the level at various heights
+    for (let i = 0; i < 30; i++) {
+        const x = 200 + i * 90;
+        const heightVariation = Math.random() * 400 + 100;
+        const y = groundY - heightVariation;
+        coins.push(new Coin(x, y));
+    }
+
+    // Additional coins on high platforms
+    for (let i = 0; i < 10; i++) {
+        const x = 400 + i * 200;
+        const y = groundY - 450;
         coins.push(new Coin(x, y));
     }
 }
@@ -482,20 +636,27 @@ function gameLoop() {
     // Draw clouds
     drawClouds();
 
-    // Draw ground
-    ctx.fillStyle = '#8B4513';
-    ctx.fillRect(0, canvas.height - 50, canvas.width, 50);
-    ctx.fillStyle = '#228B22';
-    ctx.fillRect(0, canvas.height - 55, canvas.width, 5);
+    // Draw ground with camera offset
+    const groundY = CONFIG.WORLD_HEIGHT - 50;
+    const groundScreenY = groundY - gameState.camera.y;
+    const groundScreenX = -gameState.camera.x;
 
-    // Grass details
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(groundScreenX, groundScreenY, CONFIG.WORLD_WIDTH, 50);
+    ctx.fillStyle = '#228B22';
+    ctx.fillRect(groundScreenX, groundScreenY - 5, CONFIG.WORLD_WIDTH, 5);
+
+    // Grass details (only draw visible portion)
     ctx.strokeStyle = '#32CD32';
     ctx.lineWidth = 2;
-    for (let i = 0; i < canvas.width; i += 15) {
+    const startGrass = Math.floor(gameState.camera.x / 15) * 15;
+    const endGrass = startGrass + canvas.width + 30;
+    for (let i = startGrass; i < endGrass; i += 15) {
+        const screenX = i - gameState.camera.x;
         ctx.beginPath();
-        ctx.moveTo(i, canvas.height - 55);
-        ctx.lineTo(i + 3, canvas.height - 60);
-        ctx.lineTo(i + 6, canvas.height - 55);
+        ctx.moveTo(screenX, groundScreenY - 5);
+        ctx.lineTo(screenX + 3, groundScreenY - 10);
+        ctx.lineTo(screenX + 6, groundScreenY - 5);
         ctx.stroke();
     }
 
@@ -535,11 +696,12 @@ let cloudPositions = [];
 
 function initClouds() {
     cloudPositions = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 15; i++) {
         cloudPositions.push({
-            x: Math.random() * canvas.width,
-            y: Math.random() * 200 + 20,
+            x: Math.random() * CONFIG.WORLD_WIDTH,
+            y: Math.random() * 250 + 20,
             scale: Math.random() * 0.5 + 0.5,
+            speed: Math.random() * 0.1 + 0.05,
         });
     }
 }
@@ -547,22 +709,30 @@ function initClouds() {
 function drawClouds() {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
     cloudPositions.forEach(cloud => {
-        ctx.save();
-        ctx.translate(cloud.x, cloud.y);
-        ctx.scale(cloud.scale, cloud.scale);
+        // Parallax effect - clouds move slower than camera
+        const parallaxX = cloud.x - gameState.camera.x * 0.5;
+        const parallaxY = cloud.y - gameState.camera.y * 0.3;
 
-        ctx.beginPath();
-        ctx.arc(0, 0, 20, 0, Math.PI * 2);
-        ctx.arc(25, 0, 25, 0, Math.PI * 2);
-        ctx.arc(50, 0, 20, 0, Math.PI * 2);
-        ctx.arc(25, -10, 20, 0, Math.PI * 2);
-        ctx.fill();
+        // Only draw if visible on screen
+        if (parallaxX > -100 && parallaxX < canvas.width + 100 &&
+            parallaxY > -50 && parallaxY < canvas.height + 50) {
+            ctx.save();
+            ctx.translate(parallaxX, parallaxY);
+            ctx.scale(cloud.scale, cloud.scale);
 
-        ctx.restore();
+            ctx.beginPath();
+            ctx.arc(0, 0, 20, 0, Math.PI * 2);
+            ctx.arc(25, 0, 25, 0, Math.PI * 2);
+            ctx.arc(50, 0, 20, 0, Math.PI * 2);
+            ctx.arc(25, -10, 20, 0, Math.PI * 2);
+            ctx.fill();
 
-        cloud.x -= 0.2;
+            ctx.restore();
+        }
+
+        cloud.x -= cloud.speed;
         if (cloud.x < -100) {
-            cloud.x = canvas.width + 50;
+            cloud.x = CONFIG.WORLD_WIDTH + 50;
         }
     });
 }
