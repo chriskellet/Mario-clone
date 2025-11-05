@@ -2,6 +2,8 @@
 const CONFIG = {
     GRAVITY: 0.6,
     JUMP_POWER: -12,
+    JUMP_HOLD_GRAVITY: 0.3,  // Reduced gravity while holding jump
+    MAX_JUMP_HOLD_TIME: 15,  // Frames you can hold jump for higher jump
     MOVE_SPEED: 5,
     ACCELERATION: 0.5,
     FRICTION: 0.85,
@@ -181,6 +183,8 @@ class Player {
         this.direction = 1;
         this.jumpCount = 0;
         this.invulnerable = false;
+        this.isJumping = false;
+        this.jumpTime = 0;
     }
 
     update() {
@@ -206,17 +210,34 @@ class Player {
             }
         }
 
-        // Jumping
-        if ((gameState.keys['ArrowUp'] || gameState.keys[' '] || gameState.touchControls.jump) && this.onGround) {
+        // Jumping - check if button is pressed
+        const jumpPressed = gameState.keys['ArrowUp'] || gameState.keys[' '] || gameState.touchControls.jump;
+
+        // Start jump
+        if (jumpPressed && this.onGround && !this.isJumping) {
             this.velocityY = CONFIG.JUMP_POWER;
             this.onGround = false;
+            this.isJumping = true;
+            this.jumpTime = 0;
             sounds.jump();
             createJumpDust(this.x + this.width / 2, this.y + this.height);
-            gameState.touchControls.jump = false;
         }
 
-        // Apply gravity
-        this.velocityY += CONFIG.GRAVITY;
+        // Variable jump height - hold button for higher jump
+        if (this.isJumping && jumpPressed && this.velocityY < 0 && this.jumpTime < CONFIG.MAX_JUMP_HOLD_TIME) {
+            // Apply reduced gravity while holding jump button
+            this.velocityY += CONFIG.JUMP_HOLD_GRAVITY;
+            this.jumpTime++;
+        } else {
+            // Apply normal gravity
+            this.velocityY += CONFIG.GRAVITY;
+            if (this.onGround) {
+                this.isJumping = false;
+                this.jumpTime = 0;
+            }
+        }
+
+        // Cap fall speed
         if (this.velocityY > CONFIG.MAX_FALL_SPEED) {
             this.velocityY = CONFIG.MAX_FALL_SPEED;
         }
