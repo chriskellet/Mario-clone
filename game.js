@@ -960,6 +960,7 @@ function setupTouchControls() {
     const leftBtn = document.getElementById('btn-left');
     const rightBtn = document.getElementById('btn-right');
     const jumpBtn = document.getElementById('btn-jump');
+    const controlsContainer = document.getElementById('touch-controls');
 
     // Prevent context menu
     [leftBtn, rightBtn, jumpBtn].forEach(btn => {
@@ -975,6 +976,12 @@ function setupTouchControls() {
         if (element === rightBtn || element.closest('#btn-right')) return 'right';
         if (element === jumpBtn || element.closest('#btn-jump')) return 'jump';
         return null;
+    }
+
+    // Check if touch is on a game control button
+    function isTouchOnControls(touch) {
+        const element = document.elementFromPoint(touch.clientX, touch.clientY);
+        return element && element.closest('#touch-controls');
     }
 
     // Update control states based on all active touches
@@ -993,28 +1000,33 @@ function setupTouchControls() {
         }
     }
 
-    // Handle touch events on the entire document to track position changes
+    // Handle touch events - only prevent default if touching game controls
     document.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        updateControls(e.touches);
+        const touchingControls = Array.from(e.touches).some(touch => isTouchOnControls(touch));
+        if (touchingControls) {
+            e.preventDefault();
+            updateControls(e.touches);
+        }
     }, { passive: false });
 
     document.addEventListener('touchmove', (e) => {
-        e.preventDefault();
-        updateControls(e.touches);
+        const touchingControls = Array.from(e.touches).some(touch => isTouchOnControls(touch));
+        if (touchingControls) {
+            e.preventDefault();
+            updateControls(e.touches);
+        }
     }, { passive: false });
 
     document.addEventListener('touchend', (e) => {
-        e.preventDefault();
+        // Always update controls on touch end
         updateControls(e.touches);
-    }, { passive: false });
+    });
 
     document.addEventListener('touchcancel', (e) => {
-        e.preventDefault();
         gameState.touchControls.left = false;
         gameState.touchControls.right = false;
         gameState.touchControls.jump = false;
-    }, { passive: false });
+    });
 
     // Mouse support for testing
     let mouseDown = false;
