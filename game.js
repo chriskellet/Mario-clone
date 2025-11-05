@@ -22,7 +22,79 @@ const gameState = {
     keys: {},
     touchControls: { left: false, right: false, jump: false },
     camera: { x: 0, y: 0 },
+    screenShake: { intensity: 0, duration: 0 },
 };
+
+// Particle System
+class Particle {
+    constructor(x, y, vx, vy, color, size, lifetime) {
+        this.x = x;
+        this.y = y;
+        this.vx = vx;
+        this.vy = vy;
+        this.color = color;
+        this.size = size;
+        this.lifetime = lifetime;
+        this.age = 0;
+        this.alpha = 1;
+    }
+
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.vy += 0.3; // Gravity
+        this.age++;
+        this.alpha = 1 - (this.age / this.lifetime);
+        return this.age < this.lifetime;
+    }
+
+    draw() {
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        ctx.save();
+        ctx.globalAlpha = this.alpha;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(screenX, screenY, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+let particles = [];
+
+function createParticles(x, y, count, color) {
+    for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i) / count;
+        const speed = 2 + Math.random() * 3;
+        const vx = Math.cos(angle) * speed;
+        const vy = Math.sin(angle) * speed - 2;
+        const size = 2 + Math.random() * 3;
+        particles.push(new Particle(x, y, vx, vy, color, size, 30));
+    }
+}
+
+function createJumpDust(x, y) {
+    for (let i = 0; i < 5; i++) {
+        const vx = (Math.random() - 0.5) * 4;
+        const vy = Math.random() * 2;
+        particles.push(new Particle(x, y, vx, vy, '#E0E0E0', 3, 15));
+    }
+}
+
+function updateParticles() {
+    particles = particles.filter(p => p.update());
+}
+
+function drawParticles() {
+    particles.forEach(p => p.draw());
+}
+
+function screenShake(intensity, duration) {
+    gameState.screenShake.intensity = intensity;
+    gameState.screenShake.duration = duration;
+}
 
 // Canvas Setup
 const canvas = document.getElementById('gameCanvas');
@@ -126,6 +198,7 @@ class Player {
             this.velocityY = CONFIG.JUMP_POWER;
             this.onGround = false;
             sounds.jump();
+            createJumpDust(this.x + this.width / 2, this.y + this.height);
             gameState.touchControls.jump = false;
         }
 
@@ -360,6 +433,8 @@ class Enemy {
                 gameState.score += 100;
                 document.getElementById('score').textContent = gameState.score;
                 sounds.stomp();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 12, '#8B4513');
+                screenShake(3, 10);
             } else {
                 // Enemy hit player from side or below
                 player.hit();
@@ -459,6 +534,7 @@ class Coin {
             document.getElementById('coins').textContent = gameState.coins;
             document.getElementById('score').textContent = gameState.score;
             sounds.coin();
+            createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, '#FFD700');
         }
     }
 
@@ -472,6 +548,16 @@ class Coin {
 
         ctx.translate(screenX + this.width / 2, screenY + this.height / 2);
         ctx.rotate(this.rotation);
+
+        // Glow effect
+        const glowSize = this.width / 2 + 5 + Math.sin(Date.now() / 200) * 3;
+        const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, glowSize);
+        gradient.addColorStop(0, 'rgba(255, 215, 0, 0.4)');
+        gradient.addColorStop(1, 'rgba(255, 215, 0, 0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(0, 0, glowSize, 0, Math.PI * 2);
+        ctx.fill();
 
         // Coin
         const scale = Math.abs(Math.cos(this.rotation * 2)) * 0.5 + 0.5;
@@ -553,6 +639,14 @@ function updateCamera() {
     // Keep camera within world bounds
     gameState.camera.x = Math.max(0, Math.min(gameState.camera.x, CONFIG.WORLD_WIDTH - canvas.width));
     gameState.camera.y = Math.max(0, Math.min(gameState.camera.y, CONFIG.WORLD_HEIGHT - canvas.height));
+
+    // Apply screen shake
+    if (gameState.screenShake.duration > 0) {
+        const shake = gameState.screenShake.intensity;
+        gameState.camera.x += (Math.random() - 0.5) * shake;
+        gameState.camera.y += (Math.random() - 0.5) * shake;
+        gameState.screenShake.duration--;
+    }
 }
 
 function initLevel() {
@@ -560,61 +654,87 @@ function initLevel() {
     enemies = [];
     coins = [];
     platforms = [];
+    particles = [];
     gameState.camera = { x: 0, y: 0 };
+    gameState.screenShake = { intensity: 0, duration: 0 };
 
     const groundY = CONFIG.WORLD_HEIGHT - 50;
 
-    // Create a varied level with platforms at different heights
-    // Lower platforms
-    platforms.push(new Platform(300, groundY - 100, 200, 20));
-    platforms.push(new Platform(700, groundY - 120, 180, 20));
-    platforms.push(new Platform(1100, groundY - 90, 200, 20));
-    platforms.push(new Platform(1500, groundY - 150, 220, 20));
-    platforms.push(new Platform(1900, groundY - 100, 200, 20));
-    platforms.push(new Platform(2300, groundY - 130, 180, 20));
-    platforms.push(new Platform(2700, groundY - 110, 150, 20));
+    // Create a varied level with better jump distances and recovery platforms
+    // Lower platforms - closer together for easier jumps
+    platforms.push(new Platform(250, groundY - 100, 180, 20));
+    platforms.push(new Platform(500, groundY - 110, 200, 20));
+    platforms.push(new Platform(800, groundY - 120, 180, 20));
+    platforms.push(new Platform(1050, groundY - 100, 200, 20));
+    platforms.push(new Platform(1350, groundY - 130, 180, 20));
+    platforms.push(new Platform(1600, groundY - 110, 200, 20));
+    platforms.push(new Platform(1900, groundY - 140, 180, 20));
+    platforms.push(new Platform(2150, groundY - 120, 200, 20));
+    platforms.push(new Platform(2450, groundY - 100, 180, 20));
+    platforms.push(new Platform(2750, groundY - 110, 150, 20));
 
-    // Mid-level platforms
-    platforms.push(new Platform(200, groundY - 220, 150, 20));
-    platforms.push(new Platform(550, groundY - 250, 180, 20));
-    platforms.push(new Platform(950, groundY - 230, 160, 20));
-    platforms.push(new Platform(1300, groundY - 280, 200, 20));
-    platforms.push(new Platform(1700, groundY - 260, 180, 20));
-    platforms.push(new Platform(2100, groundY - 240, 150, 20));
-    platforms.push(new Platform(2500, groundY - 270, 170, 20));
+    // Mid-level platforms - easier spacing
+    platforms.push(new Platform(200, groundY - 220, 160, 20));
+    platforms.push(new Platform(420, groundY - 240, 170, 20));
+    platforms.push(new Platform(660, groundY - 260, 160, 20));
+    platforms.push(new Platform(900, groundY - 250, 180, 20));
+    platforms.push(new Platform(1160, groundY - 270, 170, 20));
+    platforms.push(new Platform(1420, groundY - 280, 180, 20));
+    platforms.push(new Platform(1680, groundY - 270, 170, 20));
+    platforms.push(new Platform(1930, groundY - 260, 180, 20));
+    platforms.push(new Platform(2190, groundY - 250, 170, 20));
+    platforms.push(new Platform(2440, groundY - 270, 160, 20));
 
-    // High platforms (for portrait mode and challenge)
-    platforms.push(new Platform(400, groundY - 360, 140, 20));
-    platforms.push(new Platform(800, groundY - 380, 160, 20));
-    platforms.push(new Platform(1200, groundY - 400, 150, 20));
-    platforms.push(new Platform(1600, groundY - 420, 180, 20));
-    platforms.push(new Platform(2000, groundY - 390, 140, 20));
-    platforms.push(new Platform(2400, groundY - 410, 160, 20));
+    // High platforms (for portrait mode) - with better spacing
+    platforms.push(new Platform(350, groundY - 360, 150, 20));
+    platforms.push(new Platform(570, groundY - 380, 160, 20));
+    platforms.push(new Platform(800, groundY - 400, 170, 20));
+    platforms.push(new Platform(1040, groundY - 390, 160, 20));
+    platforms.push(new Platform(1270, groundY - 410, 170, 20));
+    platforms.push(new Platform(1510, groundY - 420, 160, 20));
+    platforms.push(new Platform(1750, groundY - 410, 170, 20));
+    platforms.push(new Platform(1990, groundY - 390, 160, 20));
+    platforms.push(new Platform(2220, groundY - 400, 170, 20));
+    platforms.push(new Platform(2460, groundY - 380, 160, 20));
+
+    // Recovery/safety platforms - help if you fall
+    platforms.push(new Platform(140, groundY - 150, 80, 20));
+    platforms.push(new Platform(620, groundY - 170, 80, 20));
+    platforms.push(new Platform(1180, groundY - 160, 80, 20));
+    platforms.push(new Platform(1740, groundY - 180, 80, 20));
+    platforms.push(new Platform(2300, groundY - 170, 80, 20));
 
     // Create enemies on various platforms
-    enemies.push(new Enemy(350, groundY - 140));
-    enemies.push(new Enemy(750, groundY - 160));
-    enemies.push(new Enemy(250, groundY - 260));
-    enemies.push(new Enemy(600, groundY - 290));
-    enemies.push(new Enemy(1000, groundY - 270));
-    enemies.push(new Enemy(1350, groundY - 320));
-    enemies.push(new Enemy(1550, groundY - 190));
-    enemies.push(new Enemy(1950, groundY - 140));
-    enemies.push(new Enemy(2150, groundY - 280));
-    enemies.push(new Enemy(2550, groundY - 310));
+    enemies.push(new Enemy(300, groundY - 140));
+    enemies.push(new Enemy(550, groundY - 150));
+    enemies.push(new Enemy(850, groundY - 160));
+    enemies.push(new Enemy(270, groundY - 260));
+    enemies.push(new Enemy(500, groundY - 280));
+    enemies.push(new Enemy(740, groundY - 300));
+    enemies.push(new Enemy(1100, groundY - 140));
+    enemies.push(new Enemy(1460, groundY - 320));
+    enemies.push(new Enemy(1950, groundY - 160));
+    enemies.push(new Enemy(2200, groundY - 160));
 
     // Create coins throughout the level at various heights
-    for (let i = 0; i < 30; i++) {
-        const x = 200 + i * 90;
-        const heightVariation = Math.random() * 400 + 100;
+    for (let i = 0; i < 35; i++) {
+        const x = 200 + i * 80;
+        const heightVariation = Math.random() * 350 + 120;
         const y = groundY - heightVariation;
         coins.push(new Coin(x, y));
     }
 
-    // Additional coins on high platforms
-    for (let i = 0; i < 10; i++) {
-        const x = 400 + i * 200;
-        const y = groundY - 450;
+    // Trail of coins on high platforms
+    for (let i = 0; i < 12; i++) {
+        const x = 380 + i * 190;
+        const y = groundY - 440;
+        coins.push(new Coin(x, y));
+    }
+
+    // Bonus coins between platforms
+    for (let i = 0; i < 8; i++) {
+        const x = 300 + i * 330;
+        const y = groundY - 180;
         coins.push(new Coin(x, y));
     }
 }
@@ -678,6 +798,10 @@ function gameLoop() {
     // Update and draw player
     player.update();
     player.draw();
+
+    // Update and draw particles
+    updateParticles();
+    drawParticles();
 
     // Check win condition
     if (coins.every(coin => coin.collected)) {
@@ -760,12 +884,23 @@ function setupTouchControls() {
         btn.addEventListener('contextmenu', e => e.preventDefault());
     });
 
+    // Helper to clear all controls (fixes stuck controls)
+    const clearAllControls = () => {
+        gameState.touchControls.left = false;
+        gameState.touchControls.right = false;
+        gameState.touchControls.jump = false;
+    };
+
     // Left button
     leftBtn.addEventListener('touchstart', (e) => {
         e.preventDefault();
         gameState.touchControls.left = true;
     });
     leftBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        gameState.touchControls.left = false;
+    });
+    leftBtn.addEventListener('touchcancel', (e) => {
         e.preventDefault();
         gameState.touchControls.left = false;
     });
@@ -779,6 +914,10 @@ function setupTouchControls() {
         e.preventDefault();
         gameState.touchControls.right = false;
     });
+    rightBtn.addEventListener('touchcancel', (e) => {
+        e.preventDefault();
+        gameState.touchControls.right = false;
+    });
 
     // Jump button
     jumpBtn.addEventListener('touchstart', (e) => {
@@ -789,14 +928,34 @@ function setupTouchControls() {
         e.preventDefault();
         gameState.touchControls.jump = false;
     });
+    jumpBtn.addEventListener('touchcancel', (e) => {
+        e.preventDefault();
+        gameState.touchControls.jump = false;
+    });
+
+    // Global touchend/touchcancel as safety net
+    document.addEventListener('touchend', () => {
+        // Small delay to allow specific button handlers to fire first
+        setTimeout(() => {
+            // Only clear if no touches are active
+            if (!document.querySelector(':active')) {
+                clearAllControls();
+            }
+        }, 50);
+    });
+
+    document.addEventListener('touchcancel', clearAllControls);
 
     // Mouse support for testing
     leftBtn.addEventListener('mousedown', () => gameState.touchControls.left = true);
     leftBtn.addEventListener('mouseup', () => gameState.touchControls.left = false);
+    leftBtn.addEventListener('mouseleave', () => gameState.touchControls.left = false);
     rightBtn.addEventListener('mousedown', () => gameState.touchControls.right = true);
     rightBtn.addEventListener('mouseup', () => gameState.touchControls.right = false);
+    rightBtn.addEventListener('mouseleave', () => gameState.touchControls.right = false);
     jumpBtn.addEventListener('mousedown', () => gameState.touchControls.jump = true);
     jumpBtn.addEventListener('mouseup', () => gameState.touchControls.jump = false);
+    jumpBtn.addEventListener('mouseleave', () => gameState.touchControls.jump = false);
 }
 
 // Game Controls
