@@ -227,11 +227,13 @@ class MultiplayerManager {
             let enemy;
             if (data.type === 'jumping') {
                 enemy = new JumpingEnemy(data.x, data.y, id);
+            } else if (data.type === 'turtle') {
+                enemy = new TurtleEnemy(data.x, data.y, id);
             } else {
                 enemy = new Enemy(data.x, data.y, id);
             }
 
-            enemy.velocityX = data.velocityX || -2;
+            enemy.velocityX = data.velocityX || (data.type === 'turtle' ? -1 : -2);
             enemy.alive = data.alive !== false;
             enemies.push(enemy);
         });
@@ -325,9 +327,9 @@ class MultiplayerManager {
             await enemyRef.set({
                 x: Math.round(portalX),
                 y: Math.round(portalY),
-                velocityX: -2,
+                velocityX: type === 'turtle' ? -1 : -2,
                 alive: true,
-                type: type, // 'normal' or 'jumping'
+                type: type, // 'normal', 'jumping', or 'turtle'
                 spawnedBy: multiplayerState.playerId,
                 spawnedAt: Date.now(),
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
@@ -1876,6 +1878,383 @@ class JumpingEnemy extends Enemy {
     }
 }
 
+// Turtle Enemy Class (slow enemy with shell mechanics)
+class TurtleEnemy extends Enemy {
+    constructor(x, y, id = null) {
+        super(x, y, id);
+        this.velocityX = -1; // Extra slow movement
+        this.color = '#228B22'; // Green turtle
+        this.shellColor = '#006400'; // Dark green shell
+        this.inShell = false; // Shell state
+        this.shellTimer = 0; // Time before popping out of shell
+        this.shellMaxTime = 180; // 3 seconds in shell before popping out
+        this.animationFrame = 0; // For leg/arm animation
+        this.kickVelocity = 8; // Speed when shell is kicked
+        this.isShellSliding = false; // Is the shell sliding?
+    }
+
+    update() {
+        if (!this.alive) {
+            // Respawn only in single player (in multiplayer, portals handle spawning)
+            if (!multiplayerState.connected && this.respawnTime && Date.now() >= this.respawnTime) {
+                this.alive = true;
+                this.inShell = false;
+                this.isShellSliding = false;
+                this.velocityX = -1;
+                this.respawnTime = null;
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
+            }
+            return;
+        }
+
+        // Animation frame for leg movement
+        if (!this.inShell) {
+            this.animationFrame++;
+        }
+
+        // Shell behavior
+        if (this.inShell) {
+            this.shellTimer++;
+
+            // Pop out of shell after timer
+            if (this.shellTimer >= this.shellMaxTime && !this.isShellSliding) {
+                this.inShell = false;
+                this.shellTimer = 0;
+                this.velocityX = -1;
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, this.color);
+            }
+
+            // Shell sliding - can damage player
+            if (this.isShellSliding) {
+                // Check collision with player while sliding
+                if (player.checkCollision(this) && !player.outOfLives) {
+                    // Player can stomp the sliding shell to stop it
+                    if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
+                        // Stop the shell
+                        this.isShellSliding = false;
+                        this.velocityX = 0;
+                        player.velocityY = -9;
+                        sounds.stomp();
+                        createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, this.shellColor);
+                        screenShake(3, 10);
+                        haptics.medium();
+                    } else {
+                        // Shell hits player - deal damage
+                        player.hit();
+                    }
+                }
+
+                // Check collision with other enemies
+                enemies.forEach(enemy => {
+                    if (enemy !== this && enemy.alive && this.checkCollision(enemy)) {
+                        // Shell kills other enemies
+                        enemy.alive = false;
+                        enemy.respawnTime = Date.now() + 5000;
+
+                        // Award points
+                        const baseScore = 100;
+                        gameState.score += baseScore;
+                        document.getElementById('score').textContent = gameState.score;
+                        createFloatingText(enemy.x + enemy.width / 2, enemy.y, `+${baseScore}`, '#FFD700', 20);
+
+                        sounds.stomp();
+                        createParticles(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, 12, '#8B4513');
+                        screenShake(2, 8);
+
+                        // Sync to Firebase if connected
+                        if (multiplayerState.connected && enemy.id) {
+                            multiplayer.removeEnemy(enemy.id);
+                        }
+                    }
+                });
+            }
+        }
+
+        // Apply gravity
+        this.velocityY += CONFIG.GRAVITY;
+        if (this.velocityY > CONFIG.MAX_FALL_SPEED) {
+            this.velocityY = CONFIG.MAX_FALL_SPEED;
+        }
+
+        // Horizontal movement
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        // Reset onGround flag
+        this.onGround = false;
+
+        // World bounds
+        if (this.x < 0) {
+            this.x = 0;
+            if (this.inShell) {
+                this.velocityX *= -1;
+            } else {
+                this.velocityX = Math.abs(this.velocityX); // Walk right
+            }
+        }
+        if (this.x + this.width > CONFIG.WORLD_WIDTH) {
+            this.x = CONFIG.WORLD_WIDTH - this.width;
+            if (this.inShell) {
+                this.velocityX *= -1;
+            } else {
+                this.velocityX = -Math.abs(this.velocityX); // Walk left
+            }
+        }
+
+        // Ground collision
+        const groundY = CONFIG.WORLD_HEIGHT - 50;
+        if (this.y + this.height >= groundY) {
+            this.y = groundY - this.height;
+            this.velocityY = 0;
+            this.onGround = true;
+        }
+
+        // Platform collisions
+        platforms.forEach(platform => {
+            if (this.checkCollision(platform)) {
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= platform.y) {
+                    this.y = platform.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                } else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
+        // Portal (pipe) collisions
+        portals.forEach(portal => {
+            if (portal.checkCollision(this)) {
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= portal.y) {
+                    this.y = portal.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                } else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
+        // Check collision with player (skip if player is out of lives)
+        if (this.alive && !player.outOfLives && player.checkCollision(this)) {
+            if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
+                // Player stomped turtle
+                if (!this.inShell) {
+                    // First stomp - turtle goes into shell
+                    this.inShell = true;
+                    this.shellTimer = 0;
+                    this.velocityX = 0;
+                    this.isShellSliding = false;
+                    player.velocityY = -9;
+
+                    sounds.stomp();
+                    createParticles(this.x + this.width / 2, this.y + this.height / 2, 10, this.shellColor);
+                    screenShake(3, 10);
+                    haptics.medium();
+                } else if (!this.isShellSliding) {
+                    // Kick the shell!
+                    this.isShellSliding = true;
+                    // Kick in direction player is facing
+                    if (player.x < this.x) {
+                        this.velocityX = this.kickVelocity;
+                    } else {
+                        this.velocityX = -this.kickVelocity;
+                    }
+                    player.velocityY = -9;
+
+                    sounds.stomp();
+                    createParticles(this.x + this.width / 2, this.y + this.height / 2, 10, this.shellColor);
+                    screenShake(4, 12);
+                    haptics.heavy();
+                }
+            } else if (!this.inShell) {
+                // Turtle hits player while walking
+                player.hit();
+            } else if (this.inShell && !this.isShellSliding) {
+                // Player touches stationary shell - kick it!
+                this.isShellSliding = true;
+                // Kick away from player
+                if (player.x < this.x) {
+                    this.velocityX = this.kickVelocity;
+                } else {
+                    this.velocityX = -this.kickVelocity;
+                }
+
+                sounds.stomp();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 10, this.shellColor);
+                screenShake(3, 10);
+                haptics.medium();
+            }
+        }
+
+        // Sync enemy position to Firebase (throttled)
+        if (this.alive && multiplayerState.connected && this.id) {
+            multiplayer.syncEnemyState(this);
+        }
+    }
+
+    draw() {
+        if (!this.alive) return;
+
+        ctx.save();
+
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        // Shadow
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+        ctx.beginPath();
+        ctx.ellipse(screenX + this.width / 2, screenY + this.height + 3, this.width / 2.5, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (this.inShell) {
+            // Draw shell only
+            const shellHeight = this.height * 0.6;
+            const shellY = screenY + this.height - shellHeight;
+
+            // Shell body
+            ctx.fillStyle = this.shellColor;
+            ctx.beginPath();
+            ctx.ellipse(screenX + this.width / 2, shellY + shellHeight / 2, this.width / 2.2, shellHeight / 2, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Shell pattern
+            ctx.fillStyle = this.color;
+            for (let i = 0; i < 6; i++) {
+                const angle = (i / 6) * Math.PI * 2;
+                const px = screenX + this.width / 2 + Math.cos(angle) * 8;
+                const py = shellY + shellHeight / 2 + Math.sin(angle) * 6;
+                ctx.beginPath();
+                ctx.arc(px, py, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Shell highlight
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2 - 5, shellY + shellHeight / 3, 6, 0, Math.PI * 2);
+            ctx.fill();
+
+            // If sliding, add motion lines
+            if (this.isShellSliding) {
+                ctx.strokeStyle = 'rgba(100, 100, 100, 0.4)';
+                ctx.lineWidth = 2;
+                for (let i = 0; i < 3; i++) {
+                    const offsetX = (this.velocityX > 0 ? -10 : 10) * (i + 1);
+                    ctx.beginPath();
+                    ctx.moveTo(screenX + this.width / 2 + offsetX, shellY + shellHeight / 2 - 5);
+                    ctx.lineTo(screenX + this.width / 2 + offsetX, shellY + shellHeight / 2 + 5);
+                    ctx.stroke();
+                }
+            }
+        } else {
+            // Draw full turtle with animated legs and arms
+
+            // Calculate leg/arm positions based on animation frame
+            const legSwing = Math.sin(this.animationFrame * 0.2) * 5;
+            const armSwing = Math.cos(this.animationFrame * 0.2) * 4;
+
+            // Shell on back
+            ctx.fillStyle = this.shellColor;
+            ctx.beginPath();
+            ctx.ellipse(screenX + this.width / 2, screenY + this.height / 3, this.width / 2.5, this.height / 3, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Shell pattern
+            ctx.fillStyle = this.color;
+            for (let i = 0; i < 6; i++) {
+                const angle = (i / 6) * Math.PI * 2;
+                const px = screenX + this.width / 2 + Math.cos(angle) * 8;
+                const py = screenY + this.height / 3 + Math.sin(angle) * 6;
+                ctx.beginPath();
+                ctx.arc(px, py, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Body/head
+            ctx.fillStyle = '#90EE90'; // Light green body
+            ctx.beginPath();
+            ctx.ellipse(screenX + this.width / 2, screenY + this.height * 0.65, this.width / 3.5, this.height / 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Head
+            ctx.fillStyle = '#90EE90';
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2, screenY + this.height * 0.55, this.width / 4.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Eyes
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2 - 5, screenY + this.height * 0.52, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2 + 5, screenY + this.height * 0.52, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Pupils
+            ctx.fillStyle = 'black';
+            const pupilOffset = this.velocityX > 0 ? 1 : -1;
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2 - 5 + pupilOffset, screenY + this.height * 0.52, 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2 + 5 + pupilOffset, screenY + this.height * 0.52, 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Mouth
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2, screenY + this.height * 0.57, 3, 0, Math.PI);
+            ctx.stroke();
+
+            // Animated legs
+            ctx.fillStyle = '#90EE90';
+            ctx.strokeStyle = '#228B22';
+            ctx.lineWidth = 2;
+
+            // Back leg
+            ctx.beginPath();
+            ctx.moveTo(screenX + this.width / 2 - 8, screenY + this.height * 0.7);
+            ctx.lineTo(screenX + this.width / 2 - 12, screenY + this.height * 0.85 - legSwing);
+            ctx.lineTo(screenX + this.width / 2 - 10, screenY + this.height - 2);
+            ctx.stroke();
+
+            // Front leg
+            ctx.beginPath();
+            ctx.moveTo(screenX + this.width / 2 + 8, screenY + this.height * 0.7);
+            ctx.lineTo(screenX + this.width / 2 + 12, screenY + this.height * 0.85 + legSwing);
+            ctx.lineTo(screenX + this.width / 2 + 10, screenY + this.height - 2);
+            ctx.stroke();
+
+            // Animated arms
+            // Back arm
+            ctx.beginPath();
+            ctx.moveTo(screenX + this.width / 2 - 6, screenY + this.height * 0.62);
+            ctx.lineTo(screenX + this.width / 2 - 10, screenY + this.height * 0.7 + armSwing);
+            ctx.stroke();
+
+            // Front arm
+            ctx.beginPath();
+            ctx.moveTo(screenX + this.width / 2 + 6, screenY + this.height * 0.62);
+            ctx.lineTo(screenX + this.width / 2 + 10, screenY + this.height * 0.7 - armSwing);
+            ctx.stroke();
+
+            // Feet (small circles at end of legs)
+            ctx.fillStyle = '#228B22';
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2 - 10, screenY + this.height - 2, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2 + 10, screenY + this.height - 2, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+}
+
 // Enemy Portal Class (spawns enemies)
 class Portal {
     constructor(x, y, enemyType = 'normal') {
@@ -1883,7 +2262,7 @@ class Portal {
         this.y = y;
         this.width = 40;
         this.height = 60;
-        this.enemyType = enemyType; // 'normal' or 'jumping'
+        this.enemyType = enemyType; // 'normal', 'jumping', or 'turtle'
         this.spawnCooldown = 180 + Math.random() * 180; // 3-6 seconds startup delay
         this.animation = 0;
         this.spawning = false; // Spawning animation state
@@ -1909,6 +2288,8 @@ class Portal {
                     // Single player - spawn locally
                     if (this.enemyType === 'jumping') {
                         enemies.push(new JumpingEnemy(spawnX, spawnY));
+                    } else if (this.enemyType === 'turtle') {
+                        enemies.push(new TurtleEnemy(spawnX, spawnY));
                     } else {
                         enemies.push(new Enemy(spawnX, spawnY));
                     }
@@ -1935,8 +2316,10 @@ class Portal {
             const totalEnemies = enemies.filter(e => {
                 if (this.enemyType === 'jumping') {
                     return e instanceof JumpingEnemy && e.alive;
+                } else if (this.enemyType === 'turtle') {
+                    return e instanceof TurtleEnemy && e.alive;
                 } else {
-                    return !(e instanceof JumpingEnemy) && e.alive;
+                    return !(e instanceof JumpingEnemy) && !(e instanceof TurtleEnemy) && e.alive;
                 }
             }).length;
 
@@ -2315,10 +2698,17 @@ function initLevel() {
     enemies.push(new JumpingEnemy(1650, groundY - 280));
     enemies.push(new JumpingEnemy(2350, groundY - 140));
 
+    // Add turtle enemies (slow but with shell mechanics)
+    enemies.push(new TurtleEnemy(700, groundY - 140));
+    enemies.push(new TurtleEnemy(1000, groundY - 290));
+    enemies.push(new TurtleEnemy(1800, groundY - 140));
+    enemies.push(new TurtleEnemy(2500, groundY - 310));
+
     // Add enemy spawn portals
     portals.push(new Portal(400, groundY - 60, 'normal'));
     portals.push(new Portal(1350, groundY - 60, 'jumping'));
     portals.push(new Portal(2550, groundY - 60, 'normal'));
+    portals.push(new Portal(900, groundY - 60, 'turtle'));
 
     // Create coins throughout the level at various heights
     let coinIndex = 0;
