@@ -1569,8 +1569,9 @@ class Enemy {
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
                 // Check if standing on top of portal (allow walking off)
-                // Use generous threshold to account for floating point and physics updates
-                const standingOnTop = this.onGround && Math.abs((this.y + this.height) - portal.y) < 10;
+                // Don't check onGround - it's reset to false at start of update() so it's always false here
+                // Just check if enemy Y position is close to portal top
+                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 10;
 
                 // Resolve collision on the side with smallest overlap
                 if (minOverlap === overlapTop && this.velocityY > 0) {
@@ -1853,8 +1854,9 @@ class JumpingEnemy extends Enemy {
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
                 // Check if standing on top of portal (allow walking off)
-                // Use generous threshold to account for floating point and physics updates
-                const standingOnTop = this.onGround && Math.abs((this.y + this.height) - portal.y) < 10;
+                // Don't check onGround - it's reset to false at start of update() so it's always false here
+                // Just check if enemy Y position is close to portal top
+                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 10;
 
                 // Resolve collision on the side with smallest overlap
                 if (minOverlap === overlapTop && this.velocityY > 0) {
@@ -2222,8 +2224,9 @@ class TurtleEnemy extends Enemy {
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
                 // Check if standing on top of portal (allow walking off)
-                // Use generous threshold to account for floating point and physics updates
-                const standingOnTop = this.onGround && Math.abs((this.y + this.height) - portal.y) < 10;
+                // Don't check onGround - it's reset to false at start of update() so it's always false here
+                // Just check if enemy Y position is close to portal top
+                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 10;
 
                 // Resolve collision on the side with smallest overlap
                 if (minOverlap === overlapTop && this.velocityY > 0) {
