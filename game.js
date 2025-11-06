@@ -1876,6 +1876,9 @@ class TurtleEnemy extends Enemy {
             this.animationFrame++;
         }
 
+        // Track if we handled player collision this frame (to avoid double-processing)
+        let playerCollisionHandled = false;
+
         // Shell behavior
         if (this.inShell) {
             this.shellTimer++;
@@ -1906,6 +1909,7 @@ class TurtleEnemy extends Enemy {
 
                 // Check collision with player while sliding
                 if (player.checkCollision(this) && !player.outOfLives) {
+                    playerCollisionHandled = true; // Mark collision as handled
                     // Player can stomp the sliding shell to stop it
                     if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
                         // Stop the shell
@@ -2014,8 +2018,8 @@ class TurtleEnemy extends Enemy {
             }
         });
 
-        // Check collision with player (skip if player is out of lives)
-        if (this.alive && !player.outOfLives && player.checkCollision(this)) {
+        // Check collision with player (skip if player is out of lives or already handled)
+        if (this.alive && !player.outOfLives && !playerCollisionHandled && player.checkCollision(this)) {
             if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
                 // Player stomped turtle
                 if (!this.inShell) {
@@ -2069,10 +2073,13 @@ class TurtleEnemy extends Enemy {
             }
         }
 
-        // Safety check: ensure slow velocity when not in shell
+        // Safety checks for velocity
         if (!this.inShell && Math.abs(this.velocityX) > 1) {
             // If somehow the turtle is out of shell but has high velocity, fix it
             this.velocityX = this.velocityX > 0 ? 1 : -1;
+        } else if (this.inShell && !this.isShellSliding && this.velocityX !== 0) {
+            // If in shell but not sliding, velocity should be 0 (stationary)
+            this.velocityX = 0;
         }
 
         // Sync enemy position to Firebase (throttled)
