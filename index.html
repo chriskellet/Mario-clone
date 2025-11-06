@@ -64,6 +64,13 @@
             <p>Final Score: <span id="final-score">0</span></p>
             <button id="restart-btn" class="menu-btn">Play Again</button>
         </div>
+        <div id="out-of-lives-screen" class="screen hidden">
+            <h1>Out of Lives!</h1>
+            <p>You can rejoin in <span id="respawn-countdown">10</span> seconds</p>
+            <p class="continue-hint" id="continue-hint">Or use your one-time continue?</p>
+            <button id="continue-btn" class="menu-btn continue-btn">Continue (<span id="continue-countdown">5</span>s)</button>
+            <button id="restart-from-zero-btn" class="menu-btn secondary-btn">Restart (Score → 0)</button>
+        </div>
     </div>
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
