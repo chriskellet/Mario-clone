@@ -1288,8 +1288,41 @@ class Enemy {
                 if (multiplayerState.connected) {
                     multiplayer.updateLeaderboard();
                 }
+            } else if (this.velocityY < 0 && this.y > player.y + player.height / 2) {
+                // Enemy hit player's feet from below while moving upward - kill enemy
+                this.alive = false;
+
+                // Increment combo
+                player.combo = Math.min(player.combo + 1, player.maxCombo);
+
+                // Apply multiplier to score
+                const baseScore = 100;
+                const multiplier = player.combo;
+                const scoreGained = baseScore * multiplier;
+                gameState.score += scoreGained;
+                document.getElementById('score').textContent = gameState.score;
+
+                // Show floating text with combo
+                const comboX = this.x + this.width / 2;
+                const comboY = this.y;
+
+                if (multiplier > 1) {
+                    const color = player.getComboColor(multiplier);
+                    createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                }
+                createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
+                sounds.stomp();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 12, '#8B4513');
+                screenShake(2, 8);
+                haptics.medium();
+
+                // Update leaderboard if in multiplayer
+                if (multiplayerState.connected) {
+                    multiplayer.updateLeaderboard();
+                }
             } else {
-                // Enemy hit player from side or below
+                // Enemy hit player from side - hurt player
                 player.hit();
             }
         }
@@ -1473,6 +1506,40 @@ class JumpingEnemy extends Enemy {
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
                 screenShake(4, 12);
                 haptics.heavy();
+
+                // Sync to Firebase if connected
+                if (multiplayerState.connected) {
+                    multiplayer.updateLeaderboard();
+                }
+            } else if (this.velocityY < 0 && this.y > player.y + player.height / 2) {
+                // Enemy hit player's feet from below while moving upward - kill enemy
+                this.alive = false;
+                this.respawnTime = Date.now() + 5000; // Respawn in 5 seconds
+
+                // Increment combo
+                player.combo = Math.min(player.combo + 1, player.maxCombo);
+
+                // Apply multiplier to score (jumping enemies worth more)
+                const baseScore = 150;
+                const multiplier = player.combo;
+                const scoreGained = baseScore * multiplier;
+                gameState.score += scoreGained;
+                document.getElementById('score').textContent = gameState.score;
+
+                // Show floating text with combo
+                const comboX = this.x + this.width / 2;
+                const comboY = this.y;
+
+                if (multiplier > 1) {
+                    const color = player.getComboColor(multiplier);
+                    createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                }
+                createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
+                sounds.stomp();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
+                screenShake(3, 10);
+                haptics.medium();
 
                 // Sync to Firebase if connected
                 if (multiplayerState.connected) {
