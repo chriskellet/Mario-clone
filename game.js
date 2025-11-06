@@ -1394,6 +1394,22 @@ class Enemy {
             }
         });
 
+        // Portal (pipe) collisions - solid obstacles for enemies too
+        portals.forEach(portal => {
+            if (portal.checkCollision(this)) {
+                // Landing on top of portal
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= portal.y) {
+                    this.y = portal.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                }
+                // Hitting portal from side - reverse direction
+                else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
         // Reverse direction if at edge of platform
         if (this.onGround) {
             const checkX = this.velocityX > 0 ? this.x + this.width + 5 : this.x - 5;
@@ -1640,6 +1656,22 @@ class JumpingEnemy extends Enemy {
             }
         });
 
+        // Portal (pipe) collisions - solid obstacles for enemies too
+        portals.forEach(portal => {
+            if (portal.checkCollision(this)) {
+                // Landing on top of portal
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= portal.y) {
+                    this.y = portal.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                }
+                // Hitting portal from side - reverse direction
+                else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
         // Jumping behavior
         if (this.onGround) {
             this.jumpCooldown--;
@@ -1866,8 +1898,39 @@ class Portal {
             // Limit total enemies per type (max 5 of each type globally)
             const maxEnemies = 5;
             if (totalEnemies < maxEnemies) {
-                this.spawning = true;
-                this.spawnProgress = 0;
+                // Safety check: don't spawn if any player is too close (200 pixels)
+                const safetyDistance = 200;
+                let playerTooClose = false;
+
+                // Check local player
+                const distToPlayer = Math.sqrt(
+                    Math.pow(player.x - this.x, 2) +
+                    Math.pow(player.y - this.y, 2)
+                );
+                if (distToPlayer < safetyDistance) {
+                    playerTooClose = true;
+                }
+
+                // Check remote players
+                if (!playerTooClose && multiplayerState.connected) {
+                    multiplayerState.remotePlayers.forEach((remotePlayer) => {
+                        const dist = Math.sqrt(
+                            Math.pow(remotePlayer.x - this.x, 2) +
+                            Math.pow(remotePlayer.y - this.y, 2)
+                        );
+                        if (dist < safetyDistance) {
+                            playerTooClose = true;
+                        }
+                    });
+                }
+
+                if (!playerTooClose) {
+                    this.spawning = true;
+                    this.spawnProgress = 0;
+                } else {
+                    // Player too close, check again in 1 second
+                    this.spawnCooldown = 60;
+                }
             } else {
                 // Check again in 2 seconds
                 this.spawnCooldown = 120;
