@@ -108,6 +108,9 @@ class MultiplayerManager {
             // Listen for coin state
             this.listenForCoins();
 
+            // Clear any locally spawned enemies before syncing with Firebase
+            enemies.length = 0;
+
             // Listen for enemy state
             this.listenForEnemies();
 
@@ -871,13 +874,21 @@ class Player {
             this.onGround = true;
         }
 
-        // Platform collisions
+        // Platform collisions (with edge margin for realistic physics)
         platforms.forEach(platform => {
             if (this.checkCollision(platform)) {
                 if (this.velocityY > 0 && this.y + this.height - this.velocityY <= platform.y) {
-                    this.y = platform.y - this.height;
-                    this.velocityY = 0;
-                    this.onGround = true;
+                    // Calculate horizontal overlap
+                    const overlapLeft = (this.x + this.width) - platform.x;
+                    const overlapRight = (platform.x + platform.width) - this.x;
+                    const minHorizontalOverlap = Math.min(overlapLeft, overlapRight);
+
+                    // Require at least 8 pixels of overlap to stand on platform
+                    if (minHorizontalOverlap >= 8) {
+                        this.y = platform.y - this.height;
+                        this.velocityY = 0;
+                        this.onGround = true;
+                    }
                 }
             }
         });
@@ -1032,8 +1043,17 @@ class Player {
 
             // Brief invulnerability
             this.invulnerable = true;
+            // Immediately sync invulnerability state
+            if (multiplayerState.connected) {
+                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+            }
+
             setTimeout(() => {
                 this.invulnerable = false;
+                // Immediately sync when invulnerability ends
+                if (multiplayerState.connected) {
+                    multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+                }
             }, 2000);
 
             // If hit by another player in PvP, they get points
@@ -1079,8 +1099,17 @@ class Player {
             }
 
             this.invulnerable = true;
+            // Immediately sync invulnerability state
+            if (multiplayerState.connected) {
+                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+            }
+
             setTimeout(() => {
                 this.invulnerable = false;
+                // Immediately sync when invulnerability ends
+                if (multiplayerState.connected) {
+                    multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+                }
             }, 2000);
         }
     }
@@ -1365,6 +1394,22 @@ class Enemy {
             }
         });
 
+        // Portal (pipe) collisions - solid obstacles for enemies too
+        portals.forEach(portal => {
+            if (portal.checkCollision(this)) {
+                // Landing on top of portal
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= portal.y) {
+                    this.y = portal.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                }
+                // Hitting portal from side - reverse direction
+                else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
         // Reverse direction if at edge of platform
         if (this.onGround) {
             const checkX = this.velocityX > 0 ? this.x + this.width + 5 : this.x - 5;
@@ -1611,6 +1656,22 @@ class JumpingEnemy extends Enemy {
             }
         });
 
+        // Portal (pipe) collisions - solid obstacles for enemies too
+        portals.forEach(portal => {
+            if (portal.checkCollision(this)) {
+                // Landing on top of portal
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= portal.y) {
+                    this.y = portal.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                }
+                // Hitting portal from side - reverse direction
+                else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
         // Jumping behavior
         if (this.onGround) {
             this.jumpCooldown--;
@@ -1837,8 +1898,39 @@ class Portal {
             // Limit total enemies per type (max 5 of each type globally)
             const maxEnemies = 5;
             if (totalEnemies < maxEnemies) {
-                this.spawning = true;
-                this.spawnProgress = 0;
+                // Safety check: don't spawn if any player is too close (200 pixels)
+                const safetyDistance = 200;
+                let playerTooClose = false;
+
+                // Check local player
+                const distToPlayer = Math.sqrt(
+                    Math.pow(player.x - this.x, 2) +
+                    Math.pow(player.y - this.y, 2)
+                );
+                if (distToPlayer < safetyDistance) {
+                    playerTooClose = true;
+                }
+
+                // Check remote players
+                if (!playerTooClose && multiplayerState.connected) {
+                    multiplayerState.remotePlayers.forEach((remotePlayer) => {
+                        const dist = Math.sqrt(
+                            Math.pow(remotePlayer.x - this.x, 2) +
+                            Math.pow(remotePlayer.y - this.y, 2)
+                        );
+                        if (dist < safetyDistance) {
+                            playerTooClose = true;
+                        }
+                    });
+                }
+
+                if (!playerTooClose) {
+                    this.spawning = true;
+                    this.spawnProgress = 0;
+                } else {
+                    // Player too close, check again in 1 second
+                    this.spawnCooldown = 60;
+                }
             } else {
                 // Check again in 2 seconds
                 this.spawnCooldown = 120;
@@ -2040,6 +2132,13 @@ class Platform {
         const screenX = this.x - gameState.camera.x;
         const screenY = this.y - gameState.camera.y;
 
+        ctx.save();
+
+        // Clip drawing to platform bounds
+        ctx.beginPath();
+        ctx.rect(screenX, screenY, this.width, this.height);
+        ctx.clip();
+
         // Brick texture
         ctx.fillStyle = '#D2691E';
         ctx.fillRect(screenX, screenY, this.width, this.height);
@@ -2054,9 +2153,6 @@ class Platform {
         for (let by = 0; by < this.height; by += brickHeight) {
             const offset = (by / brickHeight) % 2 === 0 ? 0 : brickWidth / 2;
             for (let bx = 0; bx < this.width; bx += brickWidth) {
-                // Skip bricks that would extend beyond platform bounds
-                if (bx + offset + brickWidth > this.width) continue;
-
                 ctx.strokeRect(screenX + bx + offset, screenY + by, brickWidth, brickHeight);
 
                 // Highlight
@@ -2068,6 +2164,8 @@ class Platform {
                 ctx.fillRect(screenX + bx + offset + 2, screenY + by + brickHeight - 5, brickWidth - 4, 3);
             }
         }
+
+        ctx.restore();
     }
 }
 
@@ -2727,7 +2825,10 @@ const restartFromZeroBtn = document.getElementById('restart-from-zero-btn');
 continueBtn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    useContinue();
+    // Only allow continue if button is not disabled
+    if (!continueBtn.disabled) {
+        useContinue();
+    }
 });
 
 restartFromZeroBtn.addEventListener('click', (e) => {
