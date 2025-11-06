@@ -1851,6 +1851,8 @@ class TurtleEnemy extends Enemy {
         this.animationFrame = 0; // For leg/arm animation
         this.kickVelocity = 8; // Speed when shell is kicked
         this.isShellSliding = false; // Is the shell sliding?
+        this.shellSlideTimer = 0; // How long shell has been sliding
+        this.shellMaxSlideTime = 300; // 5 seconds max slide time (at 60fps)
     }
 
     update() {
@@ -1860,6 +1862,8 @@ class TurtleEnemy extends Enemy {
                 this.alive = true;
                 this.inShell = false;
                 this.isShellSliding = false;
+                this.shellTimer = 0;
+                this.shellSlideTimer = 0;
                 this.velocityX = -1;
                 this.respawnTime = null;
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
@@ -1886,6 +1890,18 @@ class TurtleEnemy extends Enemy {
 
             // Shell sliding - can damage player
             if (this.isShellSliding) {
+                // Increment slide timer
+                this.shellSlideTimer++;
+
+                // Stop shell after max slide time
+                if (this.shellSlideTimer >= this.shellMaxSlideTime) {
+                    this.isShellSliding = false;
+                    this.velocityX = 0;
+                    this.shellSlideTimer = 0;
+                    createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, this.shellColor);
+                    sounds.stomp();
+                }
+
                 // Check collision with player while sliding
                 if (player.checkCollision(this) && !player.outOfLives) {
                     // Player can stomp the sliding shell to stop it
@@ -1893,6 +1909,7 @@ class TurtleEnemy extends Enemy {
                         // Stop the shell
                         this.isShellSliding = false;
                         this.velocityX = 0;
+                        this.shellSlideTimer = 0;
                         player.velocityY = -9;
                         sounds.stomp();
                         createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, this.shellColor);
@@ -2003,6 +2020,7 @@ class TurtleEnemy extends Enemy {
                     // First stomp - turtle goes into shell
                     this.inShell = true;
                     this.shellTimer = 0;
+                    this.shellSlideTimer = 0;
                     this.velocityX = 0;
                     this.isShellSliding = false;
                     player.velocityY = -9;
@@ -2014,6 +2032,7 @@ class TurtleEnemy extends Enemy {
                 } else if (!this.isShellSliding) {
                     // Kick the shell!
                     this.isShellSliding = true;
+                    this.shellSlideTimer = 0;
                     // Kick in direction player is facing
                     if (player.x < this.x) {
                         this.velocityX = this.kickVelocity;
@@ -2033,6 +2052,7 @@ class TurtleEnemy extends Enemy {
             } else if (this.inShell && !this.isShellSliding) {
                 // Player touches stationary shell - kick it!
                 this.isShellSliding = true;
+                this.shellSlideTimer = 0;
                 // Kick away from player
                 if (player.x < this.x) {
                     this.velocityX = this.kickVelocity;
