@@ -48,12 +48,14 @@ const multiplayerState = {
     playerColor: null,
     remotePlayers: new Map(),
     lastSyncTime: 0,
-    syncInterval: 50, // 20 updates per second
+    syncInterval: 150, // Reduced to ~7 updates per second, rely on interpolation
     connected: false,
     playerRef: null,
     playersRef: null,
     coinsRef: null,
     leaderboardRef: null,
+    enemiesRef: null,
+    portalRef: null,
 };
 
 // Firebase Multiplayer Manager
@@ -82,6 +84,8 @@ class MultiplayerManager {
             multiplayerState.playerRef = multiplayerState.playersRef.child(multiplayerState.playerId);
             multiplayerState.coinsRef = this.db.ref('coins');
             multiplayerState.leaderboardRef = this.db.ref('leaderboard');
+            multiplayerState.enemiesRef = this.db.ref('enemies');
+            multiplayerState.portalRef = this.db.ref('portals');
 
             // Initialize player data
             await multiplayerState.playerRef.set({
@@ -91,6 +95,7 @@ class MultiplayerManager {
                 x: 100,
                 y: 300,
                 direction: 1,
+                health: 2, // Start with 2 health (big Mario)
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
 
@@ -102,6 +107,9 @@ class MultiplayerManager {
 
             // Listen for coin state
             this.listenForCoins();
+
+            // Listen for enemy state
+            this.listenForEnemies();
 
             // Update leaderboard
             this.updateLeaderboard();
@@ -129,20 +137,41 @@ class MultiplayerManager {
             const players = snapshot.val();
             if (!players) return;
 
-            multiplayerState.remotePlayers.clear();
-
             Object.entries(players).forEach(([id, data]) => {
                 if (id !== multiplayerState.playerId) {
-                    multiplayerState.remotePlayers.set(id, {
-                        name: data.name,
-                        color: PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0],
-                        x: data.x || 0,
-                        y: data.y || 0,
-                        direction: data.direction || 1,
-                        score: data.score || 0,
-                    });
+                    const existingPlayer = multiplayerState.remotePlayers.get(id);
+
+                    if (existingPlayer) {
+                        // Update target position for interpolation
+                        existingPlayer.targetX = data.x || 0;
+                        existingPlayer.targetY = data.y || 0;
+                        existingPlayer.direction = data.direction || 1;
+                        existingPlayer.score = data.score || 0;
+                        existingPlayer.health = data.health || 2;
+                    } else {
+                        // New player - initialize with current position
+                        multiplayerState.remotePlayers.set(id, {
+                            name: data.name,
+                            color: PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0],
+                            x: data.x || 0,
+                            y: data.y || 0,
+                            targetX: data.x || 0,
+                            targetY: data.y || 0,
+                            direction: data.direction || 1,
+                            score: data.score || 0,
+                            health: data.health || 2,
+                        });
+                    }
                 }
             });
+
+            // Remove disconnected players
+            const playerIds = new Set(Object.keys(players));
+            for (const [id] of multiplayerState.remotePlayers) {
+                if (!playerIds.has(id)) {
+                    multiplayerState.remotePlayers.delete(id);
+                }
+            }
 
             // Update leaderboard display
             this.updateLeaderboardUI();
@@ -165,7 +194,41 @@ class MultiplayerManager {
         });
     }
 
-    async syncPlayerPosition(x, y, direction) {
+    listenForEnemies() {
+        multiplayerState.enemiesRef.on('value', (snapshot) => {
+            const enemyData = snapshot.val();
+            if (!enemyData) return;
+
+            // Update enemy states
+            enemies.forEach((enemy, index) => {
+                const enemyKey = `enemy_${index}`;
+                if (enemyData[enemyKey]) {
+                    const data = enemyData[enemyKey];
+                    enemy.alive = data.alive !== false;
+                    enemy.x = data.x || enemy.x;
+                    enemy.y = data.y || enemy.y;
+                    enemy.velocityX = data.velocityX || enemy.velocityX;
+
+                    // Set respawn time if enemy was killed
+                    if (!enemy.alive && data.respawnTime) {
+                        enemy.respawnTime = data.respawnTime;
+                    }
+                }
+            });
+        });
+    }
+
+    // Interpolate remote player positions for smooth movement
+    interpolateRemotePlayers() {
+        multiplayerState.remotePlayers.forEach((playerData) => {
+            // Smooth interpolation - move 20% of the way to target each frame
+            const lerpFactor = 0.2;
+            playerData.x += (playerData.targetX - playerData.x) * lerpFactor;
+            playerData.y += (playerData.targetY - playerData.y) * lerpFactor;
+        });
+    }
+
+    async syncPlayerPosition(x, y, direction, health) {
         if (!multiplayerState.connected || !multiplayerState.playerRef) return;
 
         const now = Date.now();
@@ -179,10 +242,31 @@ class MultiplayerManager {
                 y: Math.round(y),
                 direction,
                 score: gameState.score,
+                health: health || 2,
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
         } catch (error) {
             console.error('Failed to sync position:', error);
+        }
+    }
+
+    async syncEnemyState(enemyIndex, x, y, velocityX, alive) {
+        if (!multiplayerState.connected) return;
+
+        const enemyKey = `enemy_${enemyIndex}`;
+        const enemyRef = multiplayerState.enemiesRef.child(enemyKey);
+
+        try {
+            await enemyRef.set({
+                x: Math.round(x),
+                y: Math.round(y),
+                velocityX,
+                alive,
+                respawnTime: !alive ? Date.now() + 5000 : null, // 5 second respawn
+                timestamp: firebase.database.ServerValue.TIMESTAMP,
+            });
+        } catch (error) {
+            console.error('Failed to sync enemy:', error);
         }
     }
 
@@ -493,6 +577,10 @@ class Player {
         this.isJumping = false;
         this.jumpTime = 0;
         this.colorPalette = colorPalette || PLAYER_COLORS[0]; // Default to red Mario
+        this.health = 2; // 2 = big, 1 = small
+        this.outOfLives = false;
+        this.respawnCountdown = 0;
+        this.hasUsedContinue = false;
     }
 
     update() {
@@ -589,6 +677,9 @@ class Player {
             haptics.medium();  // Medium haptic on landing
         }
 
+        // Check for PvP collisions
+        this.checkRemotePlayerCollisions();
+
         // Update camera to follow player
         updateCamera();
     }
@@ -670,22 +761,56 @@ class Player {
         ctx.restore();
     }
 
-    hit() {
+    hit(fromPlayer = false) {
         if (this.invulnerable) return;
 
+        // Health system: 2 = big, 1 = small
+        if (this.health > 1) {
+            // Take damage, shrink to small Mario
+            this.health = 1;
+            sounds.powerUp(); // Different sound for taking hit
+            haptics.light();
+
+            // Brief invulnerability
+            this.invulnerable = true;
+            setTimeout(() => {
+                this.invulnerable = false;
+            }, 2000);
+
+            // If hit by another player in PvP, they get points
+            if (fromPlayer && multiplayerState.connected) {
+                // Victim loses 100 points
+                gameState.score = Math.max(0, gameState.score - 100);
+                document.getElementById('score').textContent = gameState.score;
+                multiplayer.updateLeaderboard();
+            }
+
+            return;
+        }
+
+        // Small Mario dies
         gameState.lives--;
         document.getElementById('lives').textContent = gameState.lives;
         sounds.die();
-        haptics.error();  // Error pattern when taking damage
+        haptics.error();
 
+        // Check if out of lives
         if (gameState.lives <= 0) {
-            gameOver();
+            if (multiplayerState.connected) {
+                // Continuous gameplay - out of lives mode
+                this.outOfLives = true;
+                showOutOfLivesScreen();
+            } else {
+                // Single player - game over
+                gameOver();
+            }
         } else {
             // Respawn at start position
             this.x = 100;
             this.y = 100;
             this.velocityX = 0;
             this.velocityY = 0;
+            this.health = 2; // Respawn as big Mario
 
             // Apply death penalty (20% score reduction) in multiplayer
             if (multiplayerState.connected) {
@@ -697,6 +822,38 @@ class Player {
                 this.invulnerable = false;
             }, 2000);
         }
+    }
+
+    // Check collision with remote players for PvP
+    checkRemotePlayerCollisions() {
+        if (!multiplayerState.connected || this.invulnerable) return;
+
+        multiplayerState.remotePlayers.forEach((remotePlayer, playerId) => {
+            const collision = this.x < remotePlayer.x + CONFIG.PLAYER_SIZE &&
+                            this.x + this.width > remotePlayer.x &&
+                            this.y < remotePlayer.y + CONFIG.PLAYER_SIZE &&
+                            this.y + this.height > remotePlayer.y;
+
+            if (collision) {
+                // Check if we're jumping on them (stomp)
+                if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2) {
+                    // We stomped them! They take damage
+                    this.velocityY = -8; // Bounce
+                    gameState.score += 200; // Bonus for stomping player
+                    document.getElementById('score').textContent = gameState.score;
+                    sounds.stomp();
+                    haptics.success();
+                    multiplayer.updateLeaderboard();
+
+                    // They need to handle being hit on their end
+                    // (their client will detect the collision too)
+                } else if (remotePlayer.y + CONFIG.PLAYER_SIZE > this.y &&
+                          remotePlayer.y + CONFIG.PLAYER_SIZE / 2 < this.y + this.height / 2) {
+                    // They hit us from above - we take damage
+                    this.hit(true);
+                }
+            }
+        });
     }
 }
 
@@ -1282,9 +1439,14 @@ function gameLoop() {
     player.update();
     player.draw();
 
-    // Sync player position to Firebase (throttled to 20/sec)
+    // Sync player position and health to Firebase (throttled)
     if (multiplayerState.connected) {
-        multiplayer.syncPlayerPosition(player.x, player.y, player.direction);
+        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health);
+    }
+
+    // Interpolate remote player positions for smooth movement
+    if (multiplayerState.connected) {
+        multiplayer.interpolateRemotePlayers();
     }
 
     // Draw remote players
@@ -1554,6 +1716,129 @@ function gameOver() {
     }
 }
 
+// Continuous gameplay - out of lives screen
+let continueCountdownInterval = null;
+let respawnCountdownInterval = null;
+
+function showOutOfLivesScreen() {
+    const outOfLivesScreen = document.getElementById('out-of-lives-screen');
+    const continueBtn = document.getElementById('continue-btn');
+    const continueHint = document.getElementById('continue-hint');
+    const respawnCountdownEl = document.getElementById('respawn-countdown');
+    const continueCountdownEl = document.getElementById('continue-countdown');
+
+    outOfLivesScreen.classList.remove('hidden');
+
+    // Check if continue was already used
+    if (player.hasUsedContinue) {
+        continueBtn.style.display = 'none';
+        continueHint.style.display = 'none';
+    } else {
+        continueBtn.style.display = 'block';
+        continueHint.style.display = 'block';
+        continueBtn.disabled = false;
+
+        // Start continue countdown (5 seconds)
+        let continueTime = 5;
+        continueCountdownEl.textContent = continueTime;
+
+        if (continueCountdownInterval) clearInterval(continueCountdownInterval);
+        continueCountdownInterval = setInterval(() => {
+            continueTime--;
+            continueCountdownEl.textContent = continueTime;
+
+            if (continueTime <= 0) {
+                clearInterval(continueCountdownInterval);
+                continueBtn.disabled = true;
+                continueBtn.textContent = 'Continue (Expired)';
+            }
+        }, 1000);
+    }
+
+    // Start respawn countdown (10 seconds)
+    let respawnTime = 10;
+    respawnCountdownEl.textContent = respawnTime;
+
+    if (respawnCountdownInterval) clearInterval(respawnCountdownInterval);
+    respawnCountdownInterval = setInterval(() => {
+        respawnTime--;
+        respawnCountdownEl.textContent = respawnTime;
+
+        if (respawnTime <= 0) {
+            clearInterval(respawnCountdownInterval);
+            autoRejoin();
+        }
+    }, 1000);
+}
+
+function useContinue() {
+    if (player.hasUsedContinue) return;
+
+    player.hasUsedContinue = true;
+    player.outOfLives = false;
+    gameState.lives = 3;
+    player.health = 2;
+    document.getElementById('lives').textContent = gameState.lives;
+
+    // Clear countdowns
+    if (continueCountdownInterval) clearInterval(continueCountdownInterval);
+    if (respawnCountdownInterval) clearInterval(respawnCountdownInterval);
+
+    // Hide screen and resume
+    document.getElementById('out-of-lives-screen').classList.add('hidden');
+
+    // Respawn player
+    player.x = 100;
+    player.y = 100;
+    player.velocityX = 0;
+    player.velocityY = 0;
+    player.invulnerable = true;
+    setTimeout(() => {
+        player.invulnerable = false;
+    }, 3000);
+
+    sounds.powerUp();
+}
+
+function restartFromZero() {
+    // Reset score to 0
+    gameState.score = 0;
+    gameState.lives = 3;
+    player.health = 2;
+    player.hasUsedContinue = false;
+    player.outOfLives = false;
+
+    document.getElementById('score').textContent = '0';
+    document.getElementById('lives').textContent = '3';
+
+    // Clear countdowns
+    if (continueCountdownInterval) clearInterval(continueCountdownInterval);
+    if (respawnCountdownInterval) clearInterval(respawnCountdownInterval);
+
+    // Hide screen and resume
+    document.getElementById('out-of-lives-screen').classList.add('hidden');
+
+    // Respawn player
+    player.x = 100;
+    player.y = 100;
+    player.velocityX = 0;
+    player.velocityY = 0;
+    player.invulnerable = true;
+    setTimeout(() => {
+        player.invulnerable = false;
+    }, 3000);
+
+    // Update leaderboard
+    if (multiplayerState.connected) {
+        multiplayer.updateLeaderboard();
+    }
+}
+
+function autoRejoin() {
+    // Auto rejoin after countdown expires
+    restartFromZero();
+}
+
 // UI Event Listeners
 function handleStartGame(e) {
     e.preventDefault();
@@ -1585,6 +1870,22 @@ restartBtn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     startGame();
+});
+
+// Continue and restart from zero buttons
+const continueBtn = document.getElementById('continue-btn');
+const restartFromZeroBtn = document.getElementById('restart-from-zero-btn');
+
+continueBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    useContinue();
+});
+
+restartFromZeroBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    restartFromZero();
 });
 
 // Initialize
