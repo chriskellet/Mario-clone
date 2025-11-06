@@ -51,6 +51,8 @@ const multiplayerState = {
     syncInterval: 150, // Reduced to ~7 updates per second, rely on interpolation
     heartbeatInterval: 5000, // Send heartbeat every 5 seconds if idle
     lastHeartbeatTime: 0,
+    lastCleanupTime: 0,
+    cleanupInterval: 30000, // Run cleanup every 30 seconds
     connected: false,
     playerRef: null,
     playersRef: null,
@@ -164,6 +166,7 @@ class MultiplayerManager {
                         existingPlayer.score = data.score || 0;
                         existingPlayer.health = data.health || 2;
                         existingPlayer.invulnerable = data.invulnerable || false;
+                        existingPlayer.timestamp = data.timestamp || Date.now();
                     } else {
                         // New player - initialize with current position
                         multiplayerState.remotePlayers.set(id, {
@@ -177,6 +180,7 @@ class MultiplayerManager {
                             score: data.score || 0,
                             health: data.health || 2,
                             invulnerable: data.invulnerable || false,
+                            timestamp: data.timestamp || Date.now(),
                         });
                     }
                 }
@@ -198,14 +202,56 @@ class MultiplayerManager {
 
             // Log spawn master changes
             if (multiplayerState.isSpawnMaster && !wasSpawnMaster) {
-                console.log('🎮 You are now the spawn master - controlling enemy spawns');
+                console.log('🎮 You are now the spawn master - controlling enemy spawns and cleanup');
             } else if (!multiplayerState.isSpawnMaster && wasSpawnMaster) {
                 console.log('🎮 Spawn master role transferred to another player');
+            }
+
+            // Spawn master cleans up inactive players
+            if (multiplayerState.isSpawnMaster) {
+                this.cleanupInactivePlayers(players);
             }
 
             // Update leaderboard display
             this.updateLeaderboardUI();
         });
+    }
+
+    async cleanupInactivePlayers(players) {
+        if (!multiplayerState.isSpawnMaster) return;
+
+        const now = Date.now();
+
+        // Throttle cleanup - only run every 30 seconds
+        if (now - multiplayerState.lastCleanupTime < multiplayerState.cleanupInterval) {
+            return;
+        }
+
+        multiplayerState.lastCleanupTime = now;
+        const inactivityThreshold = 60000; // 60 seconds of inactivity
+
+        for (const [playerId, playerData] of Object.entries(players)) {
+            // Skip our own player
+            if (playerId === multiplayerState.playerId) continue;
+
+            const lastUpdate = playerData.timestamp || 0;
+            const timeSinceUpdate = now - lastUpdate;
+
+            // If player hasn't updated in 60 seconds, remove them
+            if (timeSinceUpdate > inactivityThreshold) {
+                console.log(`🧹 Cleaning up inactive player: ${playerData.name} (inactive for ${Math.round(timeSinceUpdate / 1000)}s)`);
+
+                try {
+                    // Remove player from players list
+                    await multiplayerState.playersRef.child(playerId).remove();
+
+                    // Remove player from leaderboard
+                    await multiplayerState.leaderboardRef.child(playerId).remove();
+                } catch (error) {
+                    console.error('Failed to cleanup inactive player:', error);
+                }
+            }
+        }
     }
 
     listenForCoins() {
