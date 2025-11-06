@@ -209,3 +209,122 @@ body {
         padding: 8px 15px;
     }
 }
+
+/* Name Input */
+.name-input {
+    width: 300px;
+    padding: 15px 25px;
+    font-size: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 30px;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    color: white;
+    text-align: center;
+    margin-bottom: 20px;
+    outline: none;
+    transition: all 0.3s ease;
+}
+
+.name-input::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.name-input:focus {
+    border-color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.15);
+}
+
+@media (max-width: 480px) {
+    .name-input {
+        width: 250px;
+        font-size: 16px;
+        padding: 12px 20px;
+    }
+}
+
+/* Leaderboard */
+.leaderboard {
+    position: fixed;
+    top: 80px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(10px);
+    padding: 15px 20px;
+    border-radius: 15px;
+    min-width: 200px;
+    z-index: 75;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.leaderboard.hidden {
+    display: none;
+}
+
+.leaderboard h3 {
+    color: #FFD700;
+    font-size: 16px;
+    margin-bottom: 10px;
+    text-align: center;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+}
+
+#leaderboard-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.leaderboard-entry {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: white;
+    font-size: 14px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    transition: background 0.2s ease;
+}
+
+.leaderboard-entry.you {
+    background: rgba(255, 215, 0, 0.2);
+    border: 1px solid rgba(255, 215, 0, 0.4);
+}
+
+.leaderboard-entry .rank {
+    font-weight: bold;
+    color: #FFD700;
+    margin-right: 8px;
+}
+
+.leaderboard-entry .name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.leaderboard-entry .score {
+    font-weight: bold;
+    color: #6bcf7f;
+    margin-left: 10px;
+}
+
+@media (max-width: 768px) {
+    .leaderboard {
+        right: 10px;
+        top: 70px;
+        min-width: 180px;
+        padding: 12px 15px;
+    }
+
+    .leaderboard h3 {
+        font-size: 14px;
+    }
+
+    .leaderboard-entry {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+}

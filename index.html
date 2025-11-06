@@ -49,9 +49,14 @@
             <div class="coins">Coins: <span id="coins">0</span></div>
             <div class="lives">Lives: <span id="lives">3</span></div>
         </div>
+        <div id="leaderboard" class="leaderboard hidden">
+            <h3>Top Players</h3>
+            <div id="leaderboard-list"></div>
+        </div>
         <div id="start-screen" class="screen">
             <h1>Mario Clone</h1>
-            <p>Touch Edition</p>
+            <p>Multiplayer Edition</p>
+            <input type="text" id="player-name" class="name-input" placeholder="Enter your name..." maxlength="15" autocomplete="off">
             <button id="start-btn" class="menu-btn">Start Game</button>
         </div>
         <div id="game-over-screen" class="screen hidden">
@@ -60,6 +65,24 @@
             <button id="restart-btn" class="menu-btn">Play Again</button>
         </div>
     </div>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    <script>
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyDPGKgsAlCN4t9aJvrN5oD6qWFohV-RGps",
+            authDomain: "marioish.firebaseapp.com",
+            databaseURL: "https://marioish-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "marioish",
+            storageBucket: "marioish.firebasestorage.app",
+            messagingSenderId: "508377537303",
+            appId: "1:508377537303:web:829c07cfa7f40eec76b552"
+        };
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+    </script>
     <script src="game.js?v=2"></script>
     <script>
         // Register service worker for PWA support with auto-update
