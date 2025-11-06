@@ -1924,7 +1924,9 @@ class TurtleEnemy extends Enemy {
             if (this.shellTimer >= this.shellMaxTime && !this.isShellSliding) {
                 this.inShell = false;
                 this.shellTimer = 0;
-                this.velocityX = -1;
+                this.isShellSliding = false;
+                this.shellSlideTimer = 0;
+                this.velocityX = -1; // Reset to slow walking speed
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, this.color);
             }
 
@@ -2006,7 +2008,7 @@ class TurtleEnemy extends Enemy {
             if (this.inShell) {
                 this.velocityX *= -1;
             } else {
-                this.velocityX = Math.abs(this.velocityX); // Walk right
+                this.velocityX = 1; // Walk right at slow speed
             }
         }
         if (this.x + this.width > CONFIG.WORLD_WIDTH) {
@@ -2014,7 +2016,7 @@ class TurtleEnemy extends Enemy {
             if (this.inShell) {
                 this.velocityX *= -1;
             } else {
-                this.velocityX = -Math.abs(this.velocityX); // Walk left
+                this.velocityX = -1; // Walk left at slow speed
             }
         }
 
@@ -2105,6 +2107,12 @@ class TurtleEnemy extends Enemy {
                 screenShake(3, 10);
                 haptics.medium();
             }
+        }
+
+        // Safety check: ensure slow velocity when not in shell
+        if (!this.inShell && Math.abs(this.velocityX) > 1) {
+            // If somehow the turtle is out of shell but has high velocity, fix it
+            this.velocityX = this.velocityX > 0 ? 1 : -1;
         }
 
         // Sync enemy position to Firebase (throttled)
