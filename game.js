@@ -148,6 +148,7 @@ class MultiplayerManager {
                         existingPlayer.direction = data.direction || 1;
                         existingPlayer.score = data.score || 0;
                         existingPlayer.health = data.health || 2;
+                        existingPlayer.invulnerable = data.invulnerable || false;
                     } else {
                         // New player - initialize with current position
                         multiplayerState.remotePlayers.set(id, {
@@ -160,6 +161,7 @@ class MultiplayerManager {
                             direction: data.direction || 1,
                             score: data.score || 0,
                             health: data.health || 2,
+                            invulnerable: data.invulnerable || false,
                         });
                     }
                 }
@@ -228,7 +230,7 @@ class MultiplayerManager {
         });
     }
 
-    async syncPlayerPosition(x, y, direction, health) {
+    async syncPlayerPosition(x, y, direction, health, invulnerable) {
         if (!multiplayerState.connected || !multiplayerState.playerRef) return;
 
         const now = Date.now();
@@ -243,6 +245,7 @@ class MultiplayerManager {
                 direction,
                 score: gameState.score,
                 health: health || 2,
+                invulnerable: invulnerable || false,
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
         } catch (error) {
@@ -990,6 +993,9 @@ class Player {
         if (!multiplayerState.connected || this.invulnerable) return;
 
         multiplayerState.remotePlayers.forEach((remotePlayer, playerId) => {
+            // Skip collision if remote player is invulnerable - let us fall through them
+            if (remotePlayer.invulnerable) return;
+
             const collision = this.x < remotePlayer.x + CONFIG.PLAYER_SIZE &&
                             this.x + this.width > remotePlayer.x &&
                             this.y < remotePlayer.y + CONFIG.PLAYER_SIZE &&
@@ -1934,7 +1940,7 @@ function gameLoop() {
 
     // Sync player position and health to Firebase (throttled)
     if (multiplayerState.connected) {
-        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health);
+        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health, player.invulnerable);
     }
 
     // Interpolate remote player positions for smooth movement
