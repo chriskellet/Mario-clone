@@ -2919,10 +2919,11 @@ function initLevel() {
         enemies.push(new TurtleEnemy(2500, groundY - 310));
     }
 
-    // Add enemy spawn portals - just 2 total for balanced gameplay
-    // One on ground, one on a mid-level platform
-    portals.push(new Portal(600, groundY - 60, 'normal'));
-    portals.push(new Portal(1800, groundY - 300, 'jumping'));
+    // Add enemy spawn portals - 3 total for balanced gameplay
+    // Distributed across the level for variety
+    portals.push(new Portal(600, groundY - 60, 'normal'));      // Ground level - normal enemies
+    portals.push(new Portal(1200, groundY - 60, 'turtle'));     // Ground level - turtles
+    portals.push(new Portal(1800, groundY - 300, 'jumping'));   // Mid-level platform - jumping enemies
 
     // Create coins throughout the level at various heights
     let coinIndex = 0;
