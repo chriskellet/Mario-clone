@@ -49,6 +49,8 @@ const multiplayerState = {
     remotePlayers: new Map(),
     lastSyncTime: 0,
     syncInterval: 150, // Reduced to ~7 updates per second, rely on interpolation
+    heartbeatInterval: 5000, // Send heartbeat every 5 seconds if idle
+    lastHeartbeatTime: 0,
     connected: false,
     playerRef: null,
     playersRef: null,
@@ -57,6 +59,15 @@ const multiplayerState = {
     enemiesRef: null,
     portalRef: null,
     isSpawnMaster: false, // True if this client controls enemy spawning
+    // Track last synced values to avoid redundant updates
+    lastSyncedState: {
+        x: null,
+        y: null,
+        direction: null,
+        health: null,
+        invulnerable: null,
+        score: null,
+    },
 };
 
 // Firebase Multiplayer Manager
@@ -277,20 +288,52 @@ class MultiplayerManager {
         if (!multiplayerState.connected || !multiplayerState.playerRef) return;
 
         const now = Date.now();
-        if (now - multiplayerState.lastSyncTime < multiplayerState.syncInterval) return;
+        const timeSinceLastSync = now - multiplayerState.lastSyncTime;
+        const timeSinceHeartbeat = now - multiplayerState.lastHeartbeatTime;
+
+        // Check if any values have changed (with 2 pixel tolerance for position)
+        const last = multiplayerState.lastSyncedState;
+        const roundedX = Math.round(x);
+        const roundedY = Math.round(y);
+        const hasChanged =
+            Math.abs(roundedX - (last.x || 0)) > 2 ||
+            Math.abs(roundedY - (last.y || 0)) > 2 ||
+            direction !== last.direction ||
+            health !== last.health ||
+            invulnerable !== last.invulnerable ||
+            gameState.score !== last.score;
+
+        // Sync if: values changed OR it's time for heartbeat
+        const shouldSync = hasChanged || timeSinceHeartbeat >= multiplayerState.heartbeatInterval;
+
+        // Throttle to prevent too frequent updates
+        if (timeSinceLastSync < multiplayerState.syncInterval) return;
+
+        if (!shouldSync) return;
 
         multiplayerState.lastSyncTime = now;
+        if (!hasChanged) {
+            multiplayerState.lastHeartbeatTime = now; // This was a heartbeat
+        }
 
         try {
             await multiplayerState.playerRef.update({
-                x: Math.round(x),
-                y: Math.round(y),
+                x: roundedX,
+                y: roundedY,
                 direction,
                 score: gameState.score,
                 health: health || 2,
                 invulnerable: invulnerable || false,
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
+
+            // Update last synced state
+            last.x = roundedX;
+            last.y = roundedY;
+            last.direction = direction;
+            last.health = health;
+            last.invulnerable = invulnerable;
+            last.score = gameState.score;
         } catch (error) {
             console.error('Failed to sync position:', error);
         }
