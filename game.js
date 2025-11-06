@@ -2277,9 +2277,9 @@ class Portal {
             this.spawnProgress += 0.05;
             if (this.spawnProgress >= 1) {
                 // Spawn complete - create enemy via Firebase
-                // Spawn above the pipe opening to avoid collision
+                // Spawn well above the pipe opening to avoid collision
                 const spawnX = this.x + this.width / 2 - CONFIG.ENEMY_SIZE / 2;
-                const spawnY = this.y - CONFIG.ENEMY_SIZE - 5; // Extra 5 pixels clearance
+                const spawnY = this.y - CONFIG.ENEMY_SIZE - 20; // 20 pixels clearance to prevent sticking
 
                 if (multiplayerState.connected) {
                     // Spawn via Firebase
@@ -2708,23 +2708,10 @@ function initLevel() {
         enemies.push(new TurtleEnemy(2500, groundY - 310));
     }
 
-    // Add enemy spawn portals on ground
-    portals.push(new Portal(400, groundY - 60, 'normal'));
-    portals.push(new Portal(1350, groundY - 60, 'jumping'));
-    portals.push(new Portal(2550, groundY - 60, 'turtle'));
-
-    // Add portals on lower platforms (~100-140 above ground)
-    portals.push(new Portal(280, groundY - 160, 'normal'));
-    portals.push(new Portal(1070, groundY - 160, 'turtle'));
-
-    // Add portals on mid-level platforms (~220-280 above ground)
-    portals.push(new Portal(440, groundY - 300, 'jumping'));
-    portals.push(new Portal(1440, groundY - 340, 'normal'));
-    portals.push(new Portal(2210, groundY - 310, 'turtle'));
-
-    // Add portals on high platforms (~360-420 above ground)
-    portals.push(new Portal(380, groundY - 420, 'normal'));
-    portals.push(new Portal(1290, groundY - 470, 'jumping'));
+    // Add enemy spawn portals - just 2 total for balanced gameplay
+    // One on ground, one on a mid-level platform
+    portals.push(new Portal(600, groundY - 60, 'normal'));
+    portals.push(new Portal(1800, groundY - 300, 'jumping'));
 
     // Create coins throughout the level at various heights
     let coinIndex = 0;
