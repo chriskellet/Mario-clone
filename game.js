@@ -871,13 +871,21 @@ class Player {
             this.onGround = true;
         }
 
-        // Platform collisions
+        // Platform collisions (with edge margin for realistic physics)
         platforms.forEach(platform => {
             if (this.checkCollision(platform)) {
                 if (this.velocityY > 0 && this.y + this.height - this.velocityY <= platform.y) {
-                    this.y = platform.y - this.height;
-                    this.velocityY = 0;
-                    this.onGround = true;
+                    // Calculate horizontal overlap
+                    const overlapLeft = (this.x + this.width) - platform.x;
+                    const overlapRight = (platform.x + platform.width) - this.x;
+                    const minHorizontalOverlap = Math.min(overlapLeft, overlapRight);
+
+                    // Require at least 8 pixels of overlap to stand on platform
+                    if (minHorizontalOverlap >= 8) {
+                        this.y = platform.y - this.height;
+                        this.velocityY = 0;
+                        this.onGround = true;
+                    }
                 }
             }
         });
@@ -2040,6 +2048,13 @@ class Platform {
         const screenX = this.x - gameState.camera.x;
         const screenY = this.y - gameState.camera.y;
 
+        ctx.save();
+
+        // Clip drawing to platform bounds
+        ctx.beginPath();
+        ctx.rect(screenX, screenY, this.width, this.height);
+        ctx.clip();
+
         // Brick texture
         ctx.fillStyle = '#D2691E';
         ctx.fillRect(screenX, screenY, this.width, this.height);
@@ -2054,9 +2069,6 @@ class Platform {
         for (let by = 0; by < this.height; by += brickHeight) {
             const offset = (by / brickHeight) % 2 === 0 ? 0 : brickWidth / 2;
             for (let bx = 0; bx < this.width; bx += brickWidth) {
-                // Skip bricks that would extend beyond platform bounds
-                if (bx + offset + brickWidth > this.width) continue;
-
                 ctx.strokeRect(screenX + bx + offset, screenY + by, brickWidth, brickHeight);
 
                 // Highlight
@@ -2068,6 +2080,8 @@ class Platform {
                 ctx.fillRect(screenX + bx + offset + 2, screenY + by + brickHeight - 5, brickWidth - 4, 3);
             }
         }
+
+        ctx.restore();
     }
 }
 
