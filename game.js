@@ -727,6 +727,9 @@ class Player {
     }
 
     update() {
+        // Don't update if out of lives (paused for decision)
+        if (this.outOfLives) return;
+
         // Horizontal movement with momentum
         if (gameState.keys['ArrowLeft'] || gameState.touchControls.left) {
             this.velocityX -= CONFIG.ACCELERATION;
@@ -845,6 +848,13 @@ class Player {
         const screenX = this.x - gameState.camera.x;
         const screenY = this.y - gameState.camera.y;
 
+        // Scale based on health (small Mario = 0.75x size)
+        const scale = this.health > 1 ? 1.0 : 0.75;
+        const scaledWidth = this.width * scale;
+        const scaledHeight = this.height * scale;
+        // Adjust Y position so small Mario stands on ground properly
+        const yOffset = this.health > 1 ? 0 : (this.height - scaledHeight);
+
         // Blinking effect when invulnerable
         if (this.invulnerable && Math.floor(Date.now() / 100) % 2 === 0) {
             ctx.globalAlpha = 0.5;
@@ -853,58 +863,58 @@ class Player {
         // Shadow
         ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
         ctx.beginPath();
-        ctx.ellipse(screenX + this.width / 2, screenY + this.height + 5, this.width / 2.5, 5, 0, 0, Math.PI * 2);
+        ctx.ellipse(screenX + scaledWidth / 2, screenY + yOffset + scaledHeight + 5, scaledWidth / 2.5, 5, 0, 0, Math.PI * 2);
         ctx.fill();
 
         // Body (shirt) - use color palette
         ctx.fillStyle = this.colorPalette.shirt;
         ctx.beginPath();
-        ctx.roundRect(screenX + 5, screenY + 20, this.width - 10, this.height - 30, 5);
+        ctx.roundRect(screenX + 5 * scale, screenY + yOffset + 20 * scale, scaledWidth - 10 * scale, scaledHeight - 30 * scale, 5 * scale);
         ctx.fill();
 
         // Overalls - use color palette
         ctx.fillStyle = this.colorPalette.overalls;
-        ctx.fillRect(screenX + 8, screenY + 25, this.width - 16, this.height - 35);
+        ctx.fillRect(screenX + 8 * scale, screenY + yOffset + 25 * scale, scaledWidth - 16 * scale, scaledHeight - 35 * scale);
 
         // Head (skin color) - use color palette
         ctx.fillStyle = this.colorPalette.skin;
         ctx.beginPath();
-        ctx.arc(screenX + this.width / 2, screenY + 12, 12, 0, Math.PI * 2);
+        ctx.arc(screenX + scaledWidth / 2, screenY + yOffset + 12 * scale, 12 * scale, 0, Math.PI * 2);
         ctx.fill();
 
         // Hat - use color palette
         ctx.fillStyle = this.colorPalette.shirt;
         ctx.beginPath();
-        ctx.ellipse(screenX + this.width / 2, screenY + 8, 14, 8, 0, Math.PI, 2 * Math.PI);
+        ctx.ellipse(screenX + scaledWidth / 2, screenY + yOffset + 8 * scale, 14 * scale, 8 * scale, 0, Math.PI, 2 * Math.PI);
         ctx.fill();
-        ctx.fillRect(screenX + this.width / 2 - 8, screenY + 4, 16, 6);
+        ctx.fillRect(screenX + scaledWidth / 2 - 8 * scale, screenY + yOffset + 4 * scale, 16 * scale, 6 * scale);
 
         // Hat logo (M)
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 8px Arial';
+        ctx.font = `bold ${8 * scale}px Arial`;
         ctx.textAlign = 'center';
-        ctx.fillText('M', screenX + this.width / 2, screenY + 9);
+        ctx.fillText('M', screenX + scaledWidth / 2, screenY + yOffset + 9 * scale);
 
         // Eyes
         ctx.fillStyle = 'black';
-        const eyeOffset = this.direction > 0 ? 2 : -2;
-        ctx.fillRect(screenX + this.width / 2 - 3 + eyeOffset, screenY + 13, 2, 2);
-        ctx.fillRect(screenX + this.width / 2 + 3 + eyeOffset, screenY + 13, 2, 2);
+        const eyeOffset = this.direction > 0 ? 2 * scale : -2 * scale;
+        ctx.fillRect(screenX + scaledWidth / 2 - 3 * scale + eyeOffset, screenY + yOffset + 13 * scale, 2 * scale, 2 * scale);
+        ctx.fillRect(screenX + scaledWidth / 2 + 3 * scale + eyeOffset, screenY + yOffset + 13 * scale, 2 * scale, 2 * scale);
 
         // Mustache
         ctx.fillStyle = '#5C3C1C';
-        ctx.fillRect(screenX + this.width / 2 - 6, screenY + 17, 12, 3);
+        ctx.fillRect(screenX + scaledWidth / 2 - 6 * scale, screenY + yOffset + 17 * scale, 12 * scale, 3 * scale);
 
         // Buttons
         ctx.fillStyle = '#FFD700';
         ctx.beginPath();
-        ctx.arc(screenX + this.width / 2, screenY + 30, 2, 0, Math.PI * 2);
+        ctx.arc(screenX + scaledWidth / 2, screenY + yOffset + 30 * scale, 2 * scale, 0, Math.PI * 2);
         ctx.fill();
 
         // Shoes (brown)
         ctx.fillStyle = '#5C3C1C';
-        ctx.fillRect(screenX + 5, screenY + this.height - 8, 12, 8);
-        ctx.fillRect(screenX + this.width - 17, screenY + this.height - 8, 12, 8);
+        ctx.fillRect(screenX + 5 * scale, screenY + yOffset + scaledHeight - 8 * scale, 12 * scale, 8 * scale);
+        ctx.fillRect(screenX + scaledWidth - 17 * scale, screenY + yOffset + scaledHeight - 8 * scale, 12 * scale, 8 * scale);
 
         ctx.restore();
     }
