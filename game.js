@@ -56,6 +56,7 @@ const multiplayerState = {
     leaderboardRef: null,
     enemiesRef: null,
     portalRef: null,
+    isSpawnMaster: false, // True if this client controls enemy spawning
 };
 
 // Firebase Multiplayer Manager
@@ -176,6 +177,19 @@ class MultiplayerManager {
                 if (!playerIds.has(id)) {
                     multiplayerState.remotePlayers.delete(id);
                 }
+            }
+
+            // Determine spawn master (player with lowest ID alphabetically)
+            const allPlayerIds = Array.from(playerIds).sort();
+            const spawnMasterId = allPlayerIds[0];
+            const wasSpawnMaster = multiplayerState.isSpawnMaster;
+            multiplayerState.isSpawnMaster = (spawnMasterId === multiplayerState.playerId);
+
+            // Log spawn master changes
+            if (multiplayerState.isSpawnMaster && !wasSpawnMaster) {
+                console.log('🎮 You are now the spawn master - controlling enemy spawns');
+            } else if (!multiplayerState.isSpawnMaster && wasSpawnMaster) {
+                console.log('🎮 Spawn master role transferred to another player');
             }
 
             // Update leaderboard display
@@ -1028,6 +1042,31 @@ class Player {
         ctx.restore();
     }
 
+    getRandomRespawnLocation() {
+        // Try to find a safe platform to respawn on
+        if (platforms.length > 0) {
+            // Filter out platforms that are too high or too low
+            const groundY = CONFIG.WORLD_HEIGHT - 50;
+            const safePlatforms = platforms.filter(p => {
+                const platformY = p.y;
+                return platformY < groundY - 80 && platformY > 150; // Not too low, not too high
+            });
+
+            if (safePlatforms.length > 0) {
+                // Pick a random safe platform
+                const platform = safePlatforms[Math.floor(Math.random() * safePlatforms.length)];
+                // Spawn in the middle of the platform
+                return {
+                    x: platform.x + platform.width / 2 - this.width / 2,
+                    y: platform.y - this.height - 10 // Slightly above platform
+                };
+            }
+        }
+
+        // Fallback to start position if no platforms found
+        return { x: 100, y: 100 };
+    }
+
     hit(fromPlayer = false) {
         if (this.invulnerable) return;
 
@@ -1086,9 +1125,10 @@ class Player {
                 gameOver();
             }
         } else {
-            // Respawn at start position
-            this.x = 100;
-            this.y = 100;
+            // Respawn at random platform or start position
+            const spawnPos = this.getRandomRespawnLocation();
+            this.x = spawnPos.x;
+            this.y = spawnPos.y;
             this.velocityX = 0;
             this.velocityY = 0;
             this.health = 2; // Respawn as big Mario
@@ -1858,8 +1898,9 @@ class Portal {
             this.spawnProgress += 0.05;
             if (this.spawnProgress >= 1) {
                 // Spawn complete - create enemy via Firebase
+                // Spawn above the pipe opening to avoid collision
                 const spawnX = this.x + this.width / 2 - CONFIG.ENEMY_SIZE / 2;
-                const spawnY = this.y - CONFIG.ENEMY_SIZE;
+                const spawnY = this.y - CONFIG.ENEMY_SIZE - 5; // Extra 5 pixels clearance
 
                 if (multiplayerState.connected) {
                     // Spawn via Firebase
@@ -1885,7 +1926,11 @@ class Portal {
         this.spawnCooldown--;
 
         // Check if ready to start spawning
-        if (this.spawnCooldown <= 0) {
+        // In multiplayer, only the spawn master spawns enemies
+        // In single player, always spawn
+        const canSpawn = !multiplayerState.connected || multiplayerState.isSpawnMaster;
+
+        if (this.spawnCooldown <= 0 && canSpawn) {
             // Count total enemies of this type globally
             const totalEnemies = enemies.filter(e => {
                 if (this.enemyType === 'jumping') {
@@ -2733,9 +2778,10 @@ function useContinue() {
     // Hide screen and resume
     document.getElementById('out-of-lives-screen').classList.add('hidden');
 
-    // Respawn player
-    player.x = 100;
-    player.y = 100;
+    // Respawn player at random platform
+    const spawnPos = player.getRandomRespawnLocation();
+    player.x = spawnPos.x;
+    player.y = spawnPos.y;
     player.velocityX = 0;
     player.velocityY = 0;
     player.invulnerable = true;
@@ -2764,9 +2810,10 @@ function restartFromZero() {
     // Hide screen and resume
     document.getElementById('out-of-lives-screen').classList.add('hidden');
 
-    // Respawn player
-    player.x = 100;
-    player.y = 100;
+    // Respawn player at random platform
+    const spawnPos = player.getRandomRespawnLocation();
+    player.x = spawnPos.x;
+    player.y = spawnPos.y;
     player.velocityX = 0;
     player.velocityY = 0;
     player.invulnerable = true;
