@@ -531,6 +531,71 @@ function screenShake(intensity, duration) {
     gameState.screenShake.duration = duration;
 }
 
+// Floating Text System (for combos and score popups)
+class FloatingText {
+    constructor(x, y, text, color, size = 20) {
+        this.x = x;
+        this.y = y;
+        this.text = text;
+        this.color = color;
+        this.size = size;
+        this.vy = -2; // Float upward
+        this.lifetime = 60; // 1 second at 60fps
+        this.age = 0;
+        this.alpha = 1;
+        this.scale = 0.5; // Start small
+    }
+
+    update() {
+        this.y += this.vy;
+        this.vy += 0.05; // Slight deceleration
+        this.age++;
+
+        // Scale animation: grow then fade
+        if (this.age < 10) {
+            this.scale += 0.1; // Grow to full size
+        } else {
+            this.alpha = 1 - ((this.age - 10) / (this.lifetime - 10));
+        }
+
+        return this.age < this.lifetime;
+    }
+
+    draw() {
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        ctx.save();
+        ctx.globalAlpha = this.alpha;
+        ctx.font = `bold ${this.size * this.scale}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Outline for better visibility
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 3;
+        ctx.strokeText(this.text, screenX, screenY);
+
+        ctx.fillStyle = this.color;
+        ctx.fillText(this.text, screenX, screenY);
+        ctx.restore();
+    }
+}
+
+let floatingTexts = [];
+
+function createFloatingText(x, y, text, color, size = 20) {
+    floatingTexts.push(new FloatingText(x, y, text, color, size));
+}
+
+function updateFloatingTexts() {
+    floatingTexts = floatingTexts.filter(t => t.update());
+}
+
+function drawFloatingTexts() {
+    floatingTexts.forEach(t => t.draw());
+}
+
 // Haptic Feedback System
 const haptics = {
     supported: 'vibrate' in navigator,
@@ -657,6 +722,8 @@ class Player {
         this.outOfLives = false;
         this.respawnCountdown = 0;
         this.hasUsedContinue = false;
+        this.combo = 0; // Combo counter for consecutive kills
+        this.maxCombo = 10; // Cap at 10x multiplier
     }
 
     update() {
@@ -751,6 +818,11 @@ class Player {
         // Detect landing - trigger haptic when transitioning from air to ground
         if (this.onGround && !this.wasOnGround) {
             haptics.medium();  // Medium haptic on landing
+
+            // Reset combo when landing
+            if (this.combo > 0) {
+                this.combo = 0;
+            }
         }
 
         // Check for PvP collisions
@@ -840,6 +912,9 @@ class Player {
     hit(fromPlayer = false) {
         if (this.invulnerable) return;
 
+        // Reset combo on taking damage
+        this.combo = 0;
+
         // Health system: 2 = big, 1 = small
         if (this.health > 1) {
             // Take damage, shrink to small Mario
@@ -915,8 +990,27 @@ class Player {
                 if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2) {
                     // We stomped them! They take damage
                     this.velocityY = -8; // Bounce
-                    gameState.score += 200; // Bonus for stomping player
+
+                    // Increment combo
+                    this.combo = Math.min(this.combo + 1, this.maxCombo);
+
+                    // Apply multiplier to score
+                    const baseScore = 200;
+                    const multiplier = this.combo;
+                    const scoreGained = baseScore * multiplier;
+                    gameState.score += scoreGained;
                     document.getElementById('score').textContent = gameState.score;
+
+                    // Show floating text with combo
+                    const comboX = remotePlayer.x + CONFIG.PLAYER_SIZE / 2;
+                    const comboY = remotePlayer.y;
+
+                    if (multiplier > 1) {
+                        const color = this.getComboColor(multiplier);
+                        createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                    }
+                    createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
                     sounds.stomp();
                     haptics.success();
                     multiplayer.updateLeaderboard();
@@ -930,6 +1024,15 @@ class Player {
                 }
             }
         });
+    }
+
+    getComboColor(combo) {
+        // Color progression for combos
+        if (combo >= 8) return '#FF00FF'; // Magenta for 8-10x
+        if (combo >= 6) return '#FF0000'; // Red for 6-7x
+        if (combo >= 4) return '#FF6600'; // Orange for 4-5x
+        if (combo >= 2) return '#FFFF00'; // Yellow for 2-3x
+        return '#FFFFFF'; // White for 1x
     }
 }
 
@@ -1108,12 +1211,36 @@ class Enemy {
                 // Player jumped on enemy
                 this.alive = false;
                 player.velocityY = -8;
-                gameState.score += 100;
+
+                // Increment combo
+                player.combo = Math.min(player.combo + 1, player.maxCombo);
+
+                // Apply multiplier to score
+                const baseScore = 100;
+                const multiplier = player.combo;
+                const scoreGained = baseScore * multiplier;
+                gameState.score += scoreGained;
                 document.getElementById('score').textContent = gameState.score;
+
+                // Show floating text with combo
+                const comboX = this.x + this.width / 2;
+                const comboY = this.y;
+
+                if (multiplier > 1) {
+                    const color = player.getComboColor(multiplier);
+                    createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                }
+                createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
                 sounds.stomp();
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 12, '#8B4513');
                 screenShake(3, 10);
                 haptics.heavy();  // Heavy haptic for stomping enemy
+
+                // Update leaderboard if in multiplayer
+                if (multiplayerState.connected) {
+                    multiplayer.updateLeaderboard();
+                }
             } else {
                 // Enemy hit player from side or below
                 player.hit();
@@ -1274,8 +1401,27 @@ class JumpingEnemy extends Enemy {
                 this.alive = false;
                 this.respawnTime = Date.now() + 5000; // Respawn in 5 seconds
                 player.velocityY = -10; // Higher bounce for jumping enemy
-                gameState.score += 150; // More points for jumping enemy
+
+                // Increment combo
+                player.combo = Math.min(player.combo + 1, player.maxCombo);
+
+                // Apply multiplier to score (jumping enemies worth more)
+                const baseScore = 150;
+                const multiplier = player.combo;
+                const scoreGained = baseScore * multiplier;
+                gameState.score += scoreGained;
                 document.getElementById('score').textContent = gameState.score;
+
+                // Show floating text with combo
+                const comboX = this.x + this.width / 2;
+                const comboY = this.y;
+
+                if (multiplier > 1) {
+                    const color = player.getComboColor(multiplier);
+                    createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                }
+                createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
                 sounds.stomp();
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
                 screenShake(4, 12);
@@ -1796,6 +1942,10 @@ function gameLoop() {
     // Update and draw particles
     updateParticles();
     drawParticles();
+
+    // Update and draw floating texts (combos, scores)
+    updateFloatingTexts();
+    drawFloatingTexts();
 
     // Check win condition
     if (coins.every(coin => coin.collected)) {
