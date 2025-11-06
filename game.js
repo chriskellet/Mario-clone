@@ -1558,14 +1558,32 @@ class Enemy {
         // Portal (pipe) collisions - solid obstacles for enemies too
         portals.forEach(portal => {
             if (portal.checkCollision(this)) {
-                // Landing on top of portal
-                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= portal.y) {
+                // Calculate overlaps to determine collision direction
+                const overlapLeft = (this.x + this.width) - portal.x;
+                const overlapRight = (portal.x + portal.width) - this.x;
+                const overlapTop = (this.y + this.height) - portal.y;
+                const overlapBottom = (portal.y + portal.height) - this.y;
+
+                // Find smallest overlap to determine collision side
+                const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+                // Resolve collision on the side with smallest overlap
+                if (minOverlap === overlapTop && this.velocityY > 0) {
+                    // Landing on top
                     this.y = portal.y - this.height;
                     this.velocityY = 0;
                     this.onGround = true;
-                }
-                // Hitting portal from side - reverse direction
-                else if (Math.abs(this.velocityY) < 2) {
+                } else if (minOverlap === overlapBottom) {
+                    // Hitting from below
+                    this.y = portal.y + portal.height;
+                    this.velocityY = 0;
+                } else if (minOverlap === overlapLeft) {
+                    // Hitting from left side
+                    this.x = portal.x - this.width;
+                    this.velocityX *= -1;
+                } else if (minOverlap === overlapRight) {
+                    // Hitting from right side
+                    this.x = portal.x + portal.width;
                     this.velocityX *= -1;
                 }
             }
@@ -1820,14 +1838,32 @@ class JumpingEnemy extends Enemy {
         // Portal (pipe) collisions - solid obstacles for enemies too
         portals.forEach(portal => {
             if (portal.checkCollision(this)) {
-                // Landing on top of portal
-                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= portal.y) {
+                // Calculate overlaps to determine collision direction
+                const overlapLeft = (this.x + this.width) - portal.x;
+                const overlapRight = (portal.x + portal.width) - this.x;
+                const overlapTop = (this.y + this.height) - portal.y;
+                const overlapBottom = (portal.y + portal.height) - this.y;
+
+                // Find smallest overlap to determine collision side
+                const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+                // Resolve collision on the side with smallest overlap
+                if (minOverlap === overlapTop && this.velocityY > 0) {
+                    // Landing on top
                     this.y = portal.y - this.height;
                     this.velocityY = 0;
                     this.onGround = true;
-                }
-                // Hitting portal from side - reverse direction
-                else if (Math.abs(this.velocityY) < 2) {
+                } else if (minOverlap === overlapBottom) {
+                    // Hitting from below
+                    this.y = portal.y + portal.height;
+                    this.velocityY = 0;
+                } else if (minOverlap === overlapLeft) {
+                    // Hitting from left side
+                    this.x = portal.x - this.width;
+                    this.velocityX *= -1;
+                } else if (minOverlap === overlapRight) {
+                    // Hitting from right side
+                    this.x = portal.x + portal.width;
                     this.velocityX *= -1;
                 }
             }
@@ -2167,11 +2203,32 @@ class TurtleEnemy extends Enemy {
         // Portal (pipe) collisions
         portals.forEach(portal => {
             if (portal.checkCollision(this)) {
-                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= portal.y) {
+                // Calculate overlaps to determine collision direction
+                const overlapLeft = (this.x + this.width) - portal.x;
+                const overlapRight = (portal.x + portal.width) - this.x;
+                const overlapTop = (this.y + this.height) - portal.y;
+                const overlapBottom = (portal.y + portal.height) - this.y;
+
+                // Find smallest overlap to determine collision side
+                const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+                // Resolve collision on the side with smallest overlap
+                if (minOverlap === overlapTop && this.velocityY > 0) {
+                    // Landing on top
                     this.y = portal.y - this.height;
                     this.velocityY = 0;
                     this.onGround = true;
-                } else if (Math.abs(this.velocityY) < 2) {
+                } else if (minOverlap === overlapBottom) {
+                    // Hitting from below
+                    this.y = portal.y + portal.height;
+                    this.velocityY = 0;
+                } else if (minOverlap === overlapLeft) {
+                    // Hitting from left side
+                    this.x = portal.x - this.width;
+                    this.velocityX *= -1;
+                } else if (minOverlap === overlapRight) {
+                    // Hitting from right side
+                    this.x = portal.x + portal.width;
                     this.velocityX *= -1;
                 }
             }
