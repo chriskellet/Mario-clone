@@ -29,6 +29,277 @@ const gameState = {
     screenShake: { intensity: 0, duration: 0 },
 };
 
+// Multiplayer Color Palettes
+const PLAYER_COLORS = [
+    { name: 'red', shirt: '#E52521', overalls: '#0066CC', skin: '#FFDBAC' },      // Classic Mario
+    { name: 'green', shirt: '#3FBF3F', overalls: '#0066CC', skin: '#FFDBAC' },    // Luigi
+    { name: 'blue', shirt: '#4A90E2', overalls: '#1A4D8F', skin: '#FFDBAC' },     // Blue Mario
+    { name: 'yellow', shirt: '#FFD93D', overalls: '#E68A00', skin: '#FFDBAC' },   // Wario
+    { name: 'purple', shirt: '#9B59B6', overalls: '#4A235A', skin: '#FFDBAC' },   // Waluigi
+    { name: 'pink', shirt: '#FF69B4', overalls: '#C71585', skin: '#FFDBAC' },     // Pink
+    { name: 'orange', shirt: '#FF8C00', overalls: '#8B4513', skin: '#FFDBAC' },   // Orange
+    { name: 'cyan', shirt: '#00CED1', overalls: '#008B8B', skin: '#FFDBAC' },     // Cyan
+];
+
+// Multiplayer State
+const multiplayerState = {
+    playerId: null,
+    playerName: null,
+    playerColor: null,
+    remotePlayers: new Map(),
+    lastSyncTime: 0,
+    syncInterval: 50, // 20 updates per second
+    connected: false,
+    playerRef: null,
+    playersRef: null,
+    coinsRef: null,
+    leaderboardRef: null,
+};
+
+// Firebase Multiplayer Manager
+class MultiplayerManager {
+    constructor() {
+        this.db = typeof firebase !== 'undefined' ? firebase.database() : null;
+        if (!this.db) {
+            console.warn('Firebase not initialized - multiplayer disabled');
+        }
+    }
+
+    async connect(playerName) {
+        if (!this.db) return false;
+
+        try {
+            // Generate unique player ID
+            multiplayerState.playerId = this.db.ref().child('players').push().key;
+            multiplayerState.playerName = playerName || 'Anonymous';
+
+            // Assign color based on player ID hash
+            const colorIndex = Math.abs(this.hashCode(multiplayerState.playerId)) % PLAYER_COLORS.length;
+            multiplayerState.playerColor = PLAYER_COLORS[colorIndex];
+
+            // Set up Firebase references
+            multiplayerState.playersRef = this.db.ref('players');
+            multiplayerState.playerRef = multiplayerState.playersRef.child(multiplayerState.playerId);
+            multiplayerState.coinsRef = this.db.ref('coins');
+            multiplayerState.leaderboardRef = this.db.ref('leaderboard');
+
+            // Initialize player data
+            await multiplayerState.playerRef.set({
+                name: multiplayerState.playerName,
+                color: multiplayerState.playerColor.name,
+                score: 0,
+                x: 100,
+                y: 300,
+                direction: 1,
+                timestamp: firebase.database.ServerValue.TIMESTAMP,
+            });
+
+            // Set up disconnect cleanup
+            multiplayerState.playerRef.onDisconnect().remove();
+
+            // Listen for other players
+            this.listenForPlayers();
+
+            // Listen for coin state
+            this.listenForCoins();
+
+            // Update leaderboard
+            this.updateLeaderboard();
+
+            multiplayerState.connected = true;
+            console.log('Connected to multiplayer as:', multiplayerState.playerName);
+            return true;
+        } catch (error) {
+            console.error('Failed to connect to multiplayer:', error);
+            return false;
+        }
+    }
+
+    hashCode(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = ((hash << 5) - hash) + str.charCodeAt(i);
+            hash = hash & hash;
+        }
+        return hash;
+    }
+
+    listenForPlayers() {
+        multiplayerState.playersRef.on('value', (snapshot) => {
+            const players = snapshot.val();
+            if (!players) return;
+
+            multiplayerState.remotePlayers.clear();
+
+            Object.entries(players).forEach(([id, data]) => {
+                if (id !== multiplayerState.playerId) {
+                    multiplayerState.remotePlayers.set(id, {
+                        name: data.name,
+                        color: PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0],
+                        x: data.x || 0,
+                        y: data.y || 0,
+                        direction: data.direction || 1,
+                        score: data.score || 0,
+                    });
+                }
+            });
+
+            // Update leaderboard display
+            this.updateLeaderboardUI();
+        });
+    }
+
+    listenForCoins() {
+        multiplayerState.coinsRef.on('value', (snapshot) => {
+            const coinData = snapshot.val();
+            if (!coinData) return;
+
+            // Update coin collected states
+            coins.forEach((coin, index) => {
+                const coinKey = `coin_${index}`;
+                if (coinData[coinKey]) {
+                    coin.collected = true;
+                    coin.respawnTime = coinData[coinKey].respawnTime;
+                }
+            });
+        });
+    }
+
+    async syncPlayerPosition(x, y, direction) {
+        if (!multiplayerState.connected || !multiplayerState.playerRef) return;
+
+        const now = Date.now();
+        if (now - multiplayerState.lastSyncTime < multiplayerState.syncInterval) return;
+
+        multiplayerState.lastSyncTime = now;
+
+        try {
+            await multiplayerState.playerRef.update({
+                x: Math.round(x),
+                y: Math.round(y),
+                direction,
+                score: gameState.score,
+                timestamp: firebase.database.ServerValue.TIMESTAMP,
+            });
+        } catch (error) {
+            console.error('Failed to sync position:', error);
+        }
+    }
+
+    async collectCoin(coinIndex) {
+        if (!multiplayerState.connected) return;
+
+        const coinKey = `coin_${coinIndex}`;
+        const coinRef = multiplayerState.coinsRef.child(coinKey);
+
+        try {
+            // Use transaction to prevent race conditions
+            const result = await coinRef.transaction((current) => {
+                if (current === null || current.collected === false) {
+                    return {
+                        collected: true,
+                        collectedBy: multiplayerState.playerId,
+                        collectedAt: Date.now(),
+                        respawnTime: Date.now() + 10000, // 10 seconds
+                    };
+                }
+                return undefined; // Abort - coin already collected
+            });
+
+            return result.committed;
+        } catch (error) {
+            console.error('Failed to collect coin:', error);
+            return false;
+        }
+    }
+
+    async updateLeaderboard() {
+        if (!multiplayerState.connected) return;
+
+        try {
+            await multiplayerState.leaderboardRef.child(multiplayerState.playerId).set({
+                name: multiplayerState.playerName,
+                score: gameState.score,
+                timestamp: firebase.database.ServerValue.TIMESTAMP,
+            });
+        } catch (error) {
+            console.error('Failed to update leaderboard:', error);
+        }
+    }
+
+    updateLeaderboardUI() {
+        const leaderboardList = document.getElementById('leaderboard-list');
+        if (!leaderboardList) return;
+
+        // Combine current player with remote players
+        const allPlayers = [
+            {
+                id: multiplayerState.playerId,
+                name: multiplayerState.playerName,
+                score: gameState.score,
+                isYou: true,
+            },
+            ...Array.from(multiplayerState.remotePlayers.entries()).map(([id, data]) => ({
+                id,
+                name: data.name,
+                score: data.score,
+                isYou: false,
+            }))
+        ];
+
+        // Sort by score descending
+        allPlayers.sort((a, b) => b.score - a.score);
+
+        // Take top 5
+        const top5 = allPlayers.slice(0, 5);
+
+        // Render leaderboard
+        leaderboardList.innerHTML = top5.map((player, index) => `
+            <div class="leaderboard-entry ${player.isYou ? 'you' : ''}">
+                <span class="rank">#${index + 1}</span>
+                <span class="name">${player.name}${player.isYou ? ' (You)' : ''}</span>
+                <span class="score">${player.score}</span>
+            </div>
+        `).join('');
+
+        // Show leaderboard if we have players
+        const leaderboard = document.getElementById('leaderboard');
+        if (leaderboard && allPlayers.length > 0) {
+            leaderboard.classList.remove('hidden');
+        }
+    }
+
+    async respawnPlayer() {
+        if (!multiplayerState.connected) return;
+
+        // Apply 20% score penalty
+        const penalty = Math.floor(gameState.score * 0.2);
+        gameState.score = Math.max(0, gameState.score - penalty);
+        document.getElementById('score').textContent = gameState.score;
+
+        // Update Firebase
+        await this.updateLeaderboard();
+
+        console.log(`Respawned with ${penalty} point penalty`);
+    }
+
+    disconnect() {
+        if (multiplayerState.playerRef) {
+            multiplayerState.playerRef.remove();
+        }
+        if (multiplayerState.playersRef) {
+            multiplayerState.playersRef.off();
+        }
+        if (multiplayerState.coinsRef) {
+            multiplayerState.coinsRef.off();
+        }
+        multiplayerState.connected = false;
+    }
+}
+
+// Create multiplayer manager instance
+const multiplayer = new MultiplayerManager();
+
 // Particle System
 class Particle {
     constructor(x, y, vx, vy, color, size, lifetime) {
@@ -207,7 +478,7 @@ const sounds = {
 
 // Player Class
 class Player {
-    constructor(x, y) {
+    constructor(x, y, colorPalette = null) {
         this.x = x;
         this.y = y;
         this.width = CONFIG.PLAYER_SIZE;
@@ -221,6 +492,7 @@ class Player {
         this.invulnerable = false;
         this.isJumping = false;
         this.jumpTime = 0;
+        this.colorPalette = colorPalette || PLAYER_COLORS[0]; // Default to red Mario
     }
 
     update() {
@@ -345,24 +617,24 @@ class Player {
         ctx.ellipse(screenX + this.width / 2, screenY + this.height + 5, this.width / 2.5, 5, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Body (red shirt)
-        ctx.fillStyle = '#E52521';
+        // Body (shirt) - use color palette
+        ctx.fillStyle = this.colorPalette.shirt;
         ctx.beginPath();
         ctx.roundRect(screenX + 5, screenY + 20, this.width - 10, this.height - 30, 5);
         ctx.fill();
 
-        // Overalls (blue)
-        ctx.fillStyle = '#2B5FD9';
+        // Overalls - use color palette
+        ctx.fillStyle = this.colorPalette.overalls;
         ctx.fillRect(screenX + 8, screenY + 25, this.width - 16, this.height - 35);
 
-        // Head (skin color)
-        ctx.fillStyle = '#FFD1A1';
+        // Head (skin color) - use color palette
+        ctx.fillStyle = this.colorPalette.skin;
         ctx.beginPath();
         ctx.arc(screenX + this.width / 2, screenY + 12, 12, 0, Math.PI * 2);
         ctx.fill();
 
-        // Hat (red)
-        ctx.fillStyle = '#E52521';
+        // Hat - use color palette
+        ctx.fillStyle = this.colorPalette.shirt;
         ctx.beginPath();
         ctx.ellipse(screenX + this.width / 2, screenY + 8, 14, 8, 0, Math.PI, 2 * Math.PI);
         ctx.fill();
@@ -409,12 +681,105 @@ class Player {
         if (gameState.lives <= 0) {
             gameOver();
         } else {
+            // Respawn at start position
+            this.x = 100;
+            this.y = 100;
+            this.velocityX = 0;
+            this.velocityY = 0;
+
+            // Apply death penalty (20% score reduction) in multiplayer
+            if (multiplayerState.connected) {
+                multiplayer.respawnPlayer();
+            }
+
             this.invulnerable = true;
             setTimeout(() => {
                 this.invulnerable = false;
             }, 2000);
         }
     }
+}
+
+// Function to draw remote players
+function drawRemotePlayer(playerData) {
+    const x = playerData.x;
+    const y = playerData.y;
+    const direction = playerData.direction;
+    const name = playerData.name;
+    const colorPalette = playerData.color;
+    const width = CONFIG.PLAYER_SIZE;
+    const height = CONFIG.PLAYER_SIZE;
+
+    const screenX = x - gameState.camera.x;
+    const screenY = y - gameState.camera.y;
+
+    ctx.save();
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+    ctx.beginPath();
+    ctx.ellipse(screenX + width / 2, screenY + height + 5, width / 2.5, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Body (shirt)
+    ctx.fillStyle = colorPalette.shirt;
+    ctx.beginPath();
+    ctx.roundRect(screenX + 5, screenY + 20, width - 10, height - 30, 5);
+    ctx.fill();
+
+    // Overalls
+    ctx.fillStyle = colorPalette.overalls;
+    ctx.fillRect(screenX + 8, screenY + 25, width - 16, height - 35);
+
+    // Head
+    ctx.fillStyle = colorPalette.skin;
+    ctx.beginPath();
+    ctx.arc(screenX + width / 2, screenY + 12, 12, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hat
+    ctx.fillStyle = colorPalette.shirt;
+    ctx.beginPath();
+    ctx.ellipse(screenX + width / 2, screenY + 8, 14, 8, 0, Math.PI, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillRect(screenX + width / 2 - 8, screenY + 4, 16, 6);
+
+    // Hat logo
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 8px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('M', screenX + width / 2, screenY + 9);
+
+    // Eyes
+    ctx.fillStyle = 'black';
+    const eyeOffset = direction > 0 ? 2 : -2;
+    ctx.fillRect(screenX + width / 2 - 3 + eyeOffset, screenY + 13, 2, 2);
+    ctx.fillRect(screenX + width / 2 + 3 + eyeOffset, screenY + 13, 2, 2);
+
+    // Mustache
+    ctx.fillStyle = '#5C3C1C';
+    ctx.fillRect(screenX + width / 2 - 6, screenY + 17, 12, 3);
+
+    // Buttons
+    ctx.fillStyle = '#FFD700';
+    ctx.beginPath();
+    ctx.arc(screenX + width / 2, screenY + 30, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Shoes
+    ctx.fillStyle = '#5C3C1C';
+    ctx.fillRect(screenX + 5, screenY + height - 8, 12, 8);
+    ctx.fillRect(screenX + width - 17, screenY + height - 8, 12, 8);
+
+    // Player name label above character
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(screenX + width / 2 - 30, screenY - 15, 60, 12);
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 10px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(name, screenX + width / 2, screenY - 7);
+
+    ctx.restore();
 }
 
 // Enemy Class
@@ -596,27 +961,60 @@ class Enemy {
 
 // Coin Class
 class Coin {
-    constructor(x, y) {
+    constructor(x, y, index) {
         this.x = x;
         this.y = y;
         this.width = CONFIG.COIN_SIZE;
         this.height = CONFIG.COIN_SIZE;
         this.collected = false;
         this.rotation = 0;
+        this.respawnTime = null;
+        this.index = index; // For Firebase identification
     }
 
     update() {
         this.rotation += 0.05;
 
+        // Check if coin should respawn
+        if (this.collected && this.respawnTime && Date.now() >= this.respawnTime) {
+            this.collected = false;
+            this.respawnTime = null;
+            // Clear from Firebase
+            if (multiplayerState.connected && multiplayerState.coinsRef) {
+                multiplayerState.coinsRef.child(`coin_${this.index}`).remove();
+            }
+        }
+
+        // Coin collection with multiplayer sync
         if (!this.collected && player.checkCollision(this)) {
-            this.collected = true;
-            gameState.coins++;
-            gameState.score += 50;
-            document.getElementById('coins').textContent = gameState.coins;
-            document.getElementById('score').textContent = gameState.score;
-            sounds.coin();
-            createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, '#FFD700');
-            haptics.success();  // Success pattern for coin collection
+            // Try to collect via Firebase (prevents race conditions)
+            if (multiplayerState.connected) {
+                multiplayer.collectCoin(this.index).then(success => {
+                    if (success) {
+                        // Successfully collected
+                        this.collected = true;
+                        gameState.coins++;
+                        gameState.score += 50;
+                        document.getElementById('coins').textContent = gameState.coins;
+                        document.getElementById('score').textContent = gameState.score;
+                        sounds.coin();
+                        createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, '#FFD700');
+                        haptics.success();
+                        // Update leaderboard
+                        multiplayer.updateLeaderboard();
+                    }
+                });
+            } else {
+                // Single player mode
+                this.collected = true;
+                gameState.coins++;
+                gameState.score += 50;
+                document.getElementById('coins').textContent = gameState.coins;
+                document.getElementById('score').textContent = gameState.score;
+                sounds.coin();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 8, '#FFD700');
+                haptics.success();
+            }
         }
     }
 
@@ -732,7 +1130,9 @@ function updateCamera() {
 }
 
 function initLevel() {
-    player = new Player(100, 100);
+    // Use multiplayer color if connected
+    const playerColor = multiplayerState.connected ? multiplayerState.playerColor : PLAYER_COLORS[0];
+    player = new Player(100, 100, playerColor);
     enemies = [];
     coins = [];
     platforms = [];
@@ -799,25 +1199,26 @@ function initLevel() {
     enemies.push(new Enemy(2200, groundY - 160));
 
     // Create coins throughout the level at various heights
+    let coinIndex = 0;
     for (let i = 0; i < 35; i++) {
         const x = 200 + i * 80;
         const heightVariation = Math.random() * 350 + 120;
         const y = groundY - heightVariation;
-        coins.push(new Coin(x, y));
+        coins.push(new Coin(x, y, coinIndex++));
     }
 
     // Trail of coins on high platforms
     for (let i = 0; i < 12; i++) {
         const x = 380 + i * 190;
         const y = groundY - 440;
-        coins.push(new Coin(x, y));
+        coins.push(new Coin(x, y, coinIndex++));
     }
 
     // Bonus coins between platforms
     for (let i = 0; i < 8; i++) {
         const x = 300 + i * 330;
         const y = groundY - 180;
-        coins.push(new Coin(x, y));
+        coins.push(new Coin(x, y, coinIndex++));
     }
 }
 
@@ -880,6 +1281,18 @@ function gameLoop() {
     // Update and draw player
     player.update();
     player.draw();
+
+    // Sync player position to Firebase (throttled to 20/sec)
+    if (multiplayerState.connected) {
+        multiplayer.syncPlayerPosition(player.x, player.y, player.direction);
+    }
+
+    // Draw remote players
+    if (multiplayerState.connected && multiplayerState.remotePlayers.size > 0) {
+        multiplayerState.remotePlayers.forEach((playerData) => {
+            drawRemotePlayer(playerData);
+        });
+    }
 
     // Update and draw particles
     updateParticles();
@@ -1076,9 +1489,24 @@ function setupTouchControls() {
 }
 
 // Game Controls
-function startGame() {
+async function startGame() {
     try {
         console.log('startGame called');
+
+        // Get player name from input
+        const nameInput = document.getElementById('player-name');
+        const playerName = nameInput.value.trim() || 'Player';
+
+        // Connect to multiplayer
+        if (multiplayer.db) {
+            console.log('Connecting to multiplayer...');
+            const connected = await multiplayer.connect(playerName);
+            if (connected) {
+                console.log('Multiplayer connected!');
+            } else {
+                console.warn('Failed to connect to multiplayer, continuing in single player mode');
+            }
+        }
 
         gameState.running = true;
         gameState.score = 0;
@@ -1113,6 +1541,17 @@ function gameOver() {
     gameState.running = false;
     document.getElementById('final-score').textContent = gameState.score;
     document.getElementById('game-over-screen').classList.remove('hidden');
+
+    // Disconnect from multiplayer
+    if (multiplayerState.connected) {
+        multiplayer.disconnect();
+    }
+
+    // Hide leaderboard
+    const leaderboard = document.getElementById('leaderboard');
+    if (leaderboard) {
+        leaderboard.classList.add('hidden');
+    }
 }
 
 // UI Event Listeners
