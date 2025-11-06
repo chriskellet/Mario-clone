@@ -253,12 +253,32 @@ body {
     padding: 15px 20px;
     border-radius: 15px;
     min-width: 200px;
+    max-height: 50vh;
+    overflow-y: auto;
     z-index: 75;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
 }
 
 .leaderboard.hidden {
     display: none;
+}
+
+.leaderboard::-webkit-scrollbar {
+    width: 6px;
+}
+
+.leaderboard::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+}
+
+.leaderboard::-webkit-scrollbar-thumb {
+    background: rgba(255, 215, 0, 0.5);
+    border-radius: 3px;
+}
+
+.leaderboard::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 215, 0, 0.7);
 }
 
 .leaderboard h3 {
@@ -313,19 +333,34 @@ body {
 
 @media (max-width: 768px) {
     .leaderboard {
-        right: 10px;
-        top: 70px;
-        min-width: 180px;
-        padding: 12px 15px;
+        right: 5px;
+        top: 10px;
+        min-width: 140px;
+        max-width: 160px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.4);
+        max-height: 35vh;
+        border-radius: 10px;
     }
 
     .leaderboard h3 {
-        font-size: 14px;
+        font-size: 11px;
+        margin-bottom: 6px;
     }
 
     .leaderboard-entry {
-        font-size: 12px;
-        padding: 4px 8px;
+        font-size: 10px;
+        padding: 3px 6px;
+        gap: 4px;
+    }
+
+    .leaderboard-entry .rank {
+        margin-right: 4px;
+        min-width: 15px;
+    }
+
+    .leaderboard-entry .score {
+        margin-left: 6px;
     }
 }
 
@@ -367,6 +402,9 @@ body {
     margin-bottom: 30px;
     min-width: 300px;
     max-width: 400px;
+    max-height: 60vh;
+    display: flex;
+    flex-direction: column;
 }
 
 .all-time-leaderboard h3 {
@@ -375,12 +413,34 @@ body {
     margin-bottom: 15px;
     text-align: center;
     text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+    flex-shrink: 0;
 }
 
 #all-time-list {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 5px;
+}
+
+#all-time-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+#all-time-list::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+#all-time-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 215, 0, 0.5);
+    border-radius: 4px;
+}
+
+#all-time-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 215, 0, 0.7);
 }
 
 .all-time-entry {
