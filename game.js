@@ -1116,6 +1116,249 @@ class Enemy {
     }
 }
 
+// Jumping Enemy Class
+class JumpingEnemy extends Enemy {
+    constructor(x, y) {
+        super(x, y);
+        this.jumpCooldown = 0;
+        this.jumpInterval = 60 + Math.random() * 60; // Jump every 60-120 frames
+        this.color = '#FF6B6B'; // Red color to distinguish from regular enemies
+    }
+
+    update() {
+        if (!this.alive) {
+            // Check for respawn
+            if (this.respawnTime && Date.now() >= this.respawnTime) {
+                this.alive = true;
+                this.respawnTime = null;
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
+            }
+            return;
+        }
+
+        // Apply gravity
+        this.velocityY += CONFIG.GRAVITY;
+        if (this.velocityY > CONFIG.MAX_FALL_SPEED) {
+            this.velocityY = CONFIG.MAX_FALL_SPEED;
+        }
+
+        // Horizontal movement
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        // Reset onGround flag
+        this.onGround = false;
+
+        // World bounds
+        if (this.x < 0) {
+            this.x = 0;
+            this.velocityX *= -1;
+        }
+        if (this.x + this.width > CONFIG.WORLD_WIDTH) {
+            this.x = CONFIG.WORLD_WIDTH - this.width;
+            this.velocityX *= -1;
+        }
+
+        // Ground collision
+        const groundY = CONFIG.WORLD_HEIGHT - 50;
+        if (this.y + this.height >= groundY) {
+            this.y = groundY - this.height;
+            this.velocityY = 0;
+            this.onGround = true;
+        }
+
+        // Platform collisions
+        platforms.forEach(platform => {
+            if (this.checkCollision(platform)) {
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= platform.y) {
+                    this.y = platform.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                } else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
+        // Jumping behavior
+        if (this.onGround) {
+            this.jumpCooldown--;
+            if (this.jumpCooldown <= 0) {
+                // Jump!
+                this.velocityY = -10;
+                this.jumpCooldown = this.jumpInterval;
+                createParticles(this.x + this.width / 2, this.y + this.height, 5, this.color);
+            }
+        }
+
+        // Check collision with player
+        if (this.alive && player.checkCollision(this)) {
+            if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
+                // Player stomped enemy
+                this.alive = false;
+                this.respawnTime = Date.now() + 5000; // Respawn in 5 seconds
+                player.velocityY = -10; // Higher bounce for jumping enemy
+                gameState.score += 150; // More points for jumping enemy
+                document.getElementById('score').textContent = gameState.score;
+                sounds.stomp();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
+                screenShake(4, 12);
+                haptics.heavy();
+
+                // Sync to Firebase if connected
+                if (multiplayerState.connected) {
+                    multiplayer.updateLeaderboard();
+                }
+            } else {
+                player.hit();
+            }
+        }
+    }
+
+    draw() {
+        if (!this.alive) return;
+
+        ctx.save();
+
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        // Shadow
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+        ctx.beginPath();
+        ctx.ellipse(screenX + this.width / 2, screenY + this.height + 3, this.width / 2.5, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Body (red mushroom with legs)
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2, screenY + this.height / 3, this.width / 2.2, 0, Math.PI, true);
+        ctx.fill();
+
+        ctx.fillStyle = '#FF8888';
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2, screenY + this.height / 3, this.width / 2.2, 0, Math.PI);
+        ctx.fill();
+
+        // Spots
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2 - 8, screenY + 8, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2 + 8, screenY + 8, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Stem (shorter for jumping enemy)
+        ctx.fillStyle = '#FFE4B5';
+        ctx.fillRect(screenX + this.width / 2 - 5, screenY + this.height / 3, 10, this.height / 2.5);
+
+        // Eyes (wider)
+        ctx.fillStyle = 'black';
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2 - 7, screenY + this.height / 2, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2 + 7, screenY + this.height / 2, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Spring legs (to show it jumps)
+        ctx.strokeStyle = '#444';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(screenX + this.width / 2 - 8, screenY + this.height - 8);
+        ctx.lineTo(screenX + this.width / 2 - 10, screenY + this.height - 4);
+        ctx.lineTo(screenX + this.width / 2 - 8, screenY + this.height);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenX + this.width / 2 + 8, screenY + this.height - 8);
+        ctx.lineTo(screenX + this.width / 2 + 10, screenY + this.height - 4);
+        ctx.lineTo(screenX + this.width / 2 + 8, screenY + this.height);
+        ctx.stroke();
+
+        ctx.restore();
+    }
+}
+
+// Enemy Portal Class (spawns enemies)
+class Portal {
+    constructor(x, y, enemyType = 'normal') {
+        this.x = x;
+        this.y = y;
+        this.width = 40;
+        this.height = 60;
+        this.enemyType = enemyType; // 'normal' or 'jumping'
+        this.spawnCooldown = 0;
+        this.animation = 0;
+    }
+
+    update() {
+        this.animation += 0.1;
+        this.spawnCooldown--;
+
+        // Spawn enemy if cooldown is ready
+        if (this.spawnCooldown <= 0) {
+            const nearbyEnemies = enemies.filter(e => {
+                return e.alive && Math.abs(e.x - this.x) < 150 && Math.abs(e.y - this.y) < 150;
+            });
+
+            // Only spawn if less than 2 enemies nearby
+            if (nearbyEnemies.length < 2) {
+                if (this.enemyType === 'jumping') {
+                    enemies.push(new JumpingEnemy(this.x, this.y - 50));
+                } else {
+                    enemies.push(new Enemy(this.x, this.y - 50));
+                }
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 10, '#9B59B6');
+                this.spawnCooldown = 300 + Math.random() * 300; // 5-10 seconds
+            }
+        }
+    }
+
+    draw() {
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        ctx.save();
+
+        // Pipe body (green)
+        ctx.fillStyle = '#2ECC40';
+        ctx.fillRect(screenX, screenY, this.width, this.height);
+
+        // Pipe rim
+        ctx.fillStyle = '#01FF70';
+        ctx.fillRect(screenX - 5, screenY, this.width + 10, 8);
+        ctx.fillRect(screenX - 5, screenY + this.height - 8, this.width + 10, 8);
+
+        // Highlights
+        ctx.fillStyle = '#3D9970';
+        ctx.fillRect(screenX + 5, screenY + 10, 5, this.height - 20);
+
+        // Dark opening
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.beginPath();
+        ctx.ellipse(screenX + this.width / 2, screenY + 15, this.width / 3, 10, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Portal glow (pulsing)
+        const glowIntensity = Math.sin(this.animation) * 0.3 + 0.5;
+        ctx.fillStyle = `rgba(155, 89, 182, ${glowIntensity * 0.5})`;
+        ctx.beginPath();
+        ctx.ellipse(screenX + this.width / 2, screenY + 15, this.width / 2.5, 12, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Type indicator
+        if (this.enemyType === 'jumping') {
+            ctx.fillStyle = '#FF6B6B';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', screenX + this.width / 2, screenY + 30);
+        }
+
+        ctx.restore();
+    }
+}
+
 // Coin Class
 class Coin {
     constructor(x, y, index) {
@@ -1266,6 +1509,7 @@ let player;
 let enemies = [];
 let coins = [];
 let platforms = [];
+let portals = [];
 
 // Camera system
 function updateCamera() {
@@ -1293,6 +1537,7 @@ function initLevel() {
     enemies = [];
     coins = [];
     platforms = [];
+    portals = [];
     particles = [];
     gameState.camera = { x: 0, y: 0 };
     gameState.screenShake = { intensity: 0, duration: 0 };
@@ -1354,6 +1599,16 @@ function initLevel() {
     enemies.push(new Enemy(1460, groundY - 320));
     enemies.push(new Enemy(1950, groundY - 160));
     enemies.push(new Enemy(2200, groundY - 160));
+
+    // Add jumping enemies (more challenging)
+    enemies.push(new JumpingEnemy(1200, groundY - 140));
+    enemies.push(new JumpingEnemy(1650, groundY - 280));
+    enemies.push(new JumpingEnemy(2350, groundY - 140));
+
+    // Add enemy spawn portals
+    portals.push(new Portal(400, groundY - 60, 'normal'));
+    portals.push(new Portal(1350, groundY - 60, 'jumping'));
+    portals.push(new Portal(2550, groundY - 60, 'normal'));
 
     // Create coins throughout the level at various heights
     let coinIndex = 0;
@@ -1422,6 +1677,12 @@ function gameLoop() {
 
     // Update and draw platforms
     platforms.forEach(platform => platform.draw());
+
+    // Update and draw portals
+    portals.forEach(portal => {
+        portal.update();
+        portal.draw();
+    });
 
     // Update and draw coins
     coins.forEach(coin => {
