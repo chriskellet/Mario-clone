@@ -172,7 +172,7 @@ class MultiplayerManager {
                     } else {
                         // New player - initialize with current position
                         multiplayerState.remotePlayers.set(id, {
-                            name: data.name,
+                            name: data.name || 'Unknown Player',
                             color: PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0],
                             x: data.x || 0,
                             y: data.y || 0,
@@ -1284,7 +1284,8 @@ class Player {
 
             if (collision) {
                 // Check if we're jumping on them (stomp) - ONLY way to deal damage
-                if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2) {
+                // Invulnerable players cannot hurt others (extra safety check)
+                if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2 && !this.invulnerable) {
                     // We stomped them! They take damage on their client
                     this.velocityY = -8; // Bounce
 
