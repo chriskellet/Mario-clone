@@ -108,6 +108,9 @@ class MultiplayerManager {
             // Listen for coin state
             this.listenForCoins();
 
+            // Clear any locally spawned enemies before syncing with Firebase
+            enemies.length = 0;
+
             // Listen for enemy state
             this.listenForEnemies();
 
@@ -1040,8 +1043,17 @@ class Player {
 
             // Brief invulnerability
             this.invulnerable = true;
+            // Immediately sync invulnerability state
+            if (multiplayerState.connected) {
+                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+            }
+
             setTimeout(() => {
                 this.invulnerable = false;
+                // Immediately sync when invulnerability ends
+                if (multiplayerState.connected) {
+                    multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+                }
             }, 2000);
 
             // If hit by another player in PvP, they get points
@@ -1087,8 +1099,17 @@ class Player {
             }
 
             this.invulnerable = true;
+            // Immediately sync invulnerability state
+            if (multiplayerState.connected) {
+                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+            }
+
             setTimeout(() => {
                 this.invulnerable = false;
+                // Immediately sync when invulnerability ends
+                if (multiplayerState.connected) {
+                    multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+                }
             }, 2000);
         }
     }
@@ -2741,7 +2762,10 @@ const restartFromZeroBtn = document.getElementById('restart-from-zero-btn');
 continueBtn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    useContinue();
+    // Only allow continue if button is not disabled
+    if (!continueBtn.disabled) {
+        useContinue();
+    }
 });
 
 restartFromZeroBtn.addEventListener('click', (e) => {
