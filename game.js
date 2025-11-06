@@ -197,26 +197,50 @@ class MultiplayerManager {
     }
 
     listenForEnemies() {
-        multiplayerState.enemiesRef.on('value', (snapshot) => {
-            const enemyData = snapshot.val();
-            if (!enemyData) return;
+        // Listen for new enemies being added
+        multiplayerState.enemiesRef.on('child_added', (snapshot) => {
+            const data = snapshot.val();
+            const id = snapshot.key;
 
-            // Update enemy states
-            enemies.forEach((enemy, index) => {
-                const enemyKey = `enemy_${index}`;
-                if (enemyData[enemyKey]) {
-                    const data = enemyData[enemyKey];
-                    enemy.alive = data.alive !== false;
-                    enemy.x = data.x || enemy.x;
-                    enemy.y = data.y || enemy.y;
-                    enemy.velocityX = data.velocityX || enemy.velocityX;
+            // Check if we already have this enemy
+            const existing = enemies.find(e => e.id === id);
+            if (existing) return;
 
-                    // Set respawn time if enemy was killed
-                    if (!enemy.alive && data.respawnTime) {
-                        enemy.respawnTime = data.respawnTime;
-                    }
-                }
-            });
+            // Create new enemy based on type
+            let enemy;
+            if (data.type === 'jumping') {
+                enemy = new JumpingEnemy(data.x, data.y, id);
+            } else {
+                enemy = new Enemy(data.x, data.y, id);
+            }
+
+            enemy.velocityX = data.velocityX || -2;
+            enemy.alive = data.alive !== false;
+            enemies.push(enemy);
+        });
+
+        // Listen for enemy updates
+        multiplayerState.enemiesRef.on('child_changed', (snapshot) => {
+            const data = snapshot.val();
+            const id = snapshot.key;
+
+            const enemy = enemies.find(e => e.id === id);
+            if (!enemy) return;
+
+            // Update position and state (with interpolation target)
+            enemy.x = data.x;
+            enemy.y = data.y;
+            enemy.velocityX = data.velocityX || enemy.velocityX;
+            enemy.alive = data.alive !== false;
+        });
+
+        // Listen for enemies being removed
+        multiplayerState.enemiesRef.on('child_removed', (snapshot) => {
+            const id = snapshot.key;
+            const index = enemies.findIndex(e => e.id === id);
+            if (index !== -1) {
+                enemies.splice(index, 1);
+            }
         });
     }
 
@@ -253,23 +277,58 @@ class MultiplayerManager {
         }
     }
 
-    async syncEnemyState(enemyIndex, x, y, velocityX, alive) {
-        if (!multiplayerState.connected) return;
+    async syncEnemyState(enemy) {
+        if (!multiplayerState.connected || !enemy.id) return;
 
-        const enemyKey = `enemy_${enemyIndex}`;
-        const enemyRef = multiplayerState.enemiesRef.child(enemyKey);
+        const now = Date.now();
+        // Throttle to ~10 updates per second
+        if (now - enemy.lastSyncTime < 100) return;
+        enemy.lastSyncTime = now;
+
+        const enemyRef = multiplayerState.enemiesRef.child(enemy.id);
 
         try {
-            await enemyRef.set({
-                x: Math.round(x),
-                y: Math.round(y),
-                velocityX,
-                alive,
-                respawnTime: !alive ? Date.now() + 5000 : null, // 5 second respawn
+            await enemyRef.update({
+                x: Math.round(enemy.x),
+                y: Math.round(enemy.y),
+                velocityX: enemy.velocityX,
+                alive: enemy.alive,
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
         } catch (error) {
             console.error('Failed to sync enemy:', error);
+        }
+    }
+
+    async spawnEnemy(portalX, portalY, type) {
+        if (!multiplayerState.connected) return null;
+
+        try {
+            const enemyRef = multiplayerState.enemiesRef.push();
+            await enemyRef.set({
+                x: Math.round(portalX),
+                y: Math.round(portalY),
+                velocityX: -2,
+                alive: true,
+                type: type, // 'normal' or 'jumping'
+                spawnedBy: multiplayerState.playerId,
+                spawnedAt: Date.now(),
+                timestamp: firebase.database.ServerValue.TIMESTAMP,
+            });
+            return enemyRef.key;
+        } catch (error) {
+            console.error('Failed to spawn enemy:', error);
+            return null;
+        }
+    }
+
+    async removeEnemy(enemyId) {
+        if (!multiplayerState.connected || !enemyId) return;
+
+        try {
+            await multiplayerState.enemiesRef.child(enemyId).remove();
+        } catch (error) {
+            console.error('Failed to remove enemy:', error);
         }
     }
 
@@ -1243,7 +1302,7 @@ function drawRemotePlayer(playerData) {
 
 // Enemy Class
 class Enemy {
-    constructor(x, y) {
+    constructor(x, y, id = null) {
         this.x = x;
         this.y = y;
         this.width = CONFIG.ENEMY_SIZE;
@@ -1252,6 +1311,8 @@ class Enemy {
         this.velocityY = 0;
         this.alive = true;
         this.onGround = false;
+        this.id = id; // Unique Firebase ID
+        this.lastSyncTime = 0;
     }
 
     update() {
@@ -1360,9 +1421,12 @@ class Enemy {
                 screenShake(3, 10);
                 haptics.heavy();  // Heavy haptic for stomping enemy
 
-                // Update leaderboard if in multiplayer
+                // Update leaderboard and remove enemy from Firebase if in multiplayer
                 if (multiplayerState.connected) {
                     multiplayer.updateLeaderboard();
+                    if (this.id) {
+                        multiplayer.removeEnemy(this.id);
+                    }
                 }
             } else if (this.velocityY < 0 && this.y > player.y + player.height / 2) {
                 // Enemy hit player's feet from below while moving upward - kill enemy
@@ -1393,14 +1457,22 @@ class Enemy {
                 screenShake(2, 8);
                 haptics.medium();
 
-                // Update leaderboard if in multiplayer
+                // Update leaderboard and remove enemy from Firebase if in multiplayer
                 if (multiplayerState.connected) {
                     multiplayer.updateLeaderboard();
+                    if (this.id) {
+                        multiplayer.removeEnemy(this.id);
+                    }
                 }
             } else {
                 // Enemy hit player from side - hurt player
                 player.hit();
             }
+        }
+
+        // Sync enemy position to Firebase (throttled)
+        if (this.alive && multiplayerState.connected && this.id) {
+            multiplayer.syncEnemyState(this);
         }
     }
 
@@ -1477,8 +1549,8 @@ class Enemy {
 
 // Jumping Enemy Class
 class JumpingEnemy extends Enemy {
-    constructor(x, y) {
-        super(x, y);
+    constructor(x, y, id = null) {
+        super(x, y, id);
         this.jumpCooldown = 0;
         this.jumpInterval = 60 + Math.random() * 60; // Jump every 60-120 frames
         this.color = '#FF6B6B'; // Red color to distinguish from regular enemies
@@ -1486,8 +1558,8 @@ class JumpingEnemy extends Enemy {
 
     update() {
         if (!this.alive) {
-            // Check for respawn
-            if (this.respawnTime && Date.now() >= this.respawnTime) {
+            // Respawn only in single player (in multiplayer, portals handle spawning)
+            if (!multiplayerState.connected && this.respawnTime && Date.now() >= this.respawnTime) {
                 this.alive = true;
                 this.respawnTime = null;
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
@@ -1583,9 +1655,12 @@ class JumpingEnemy extends Enemy {
                 screenShake(4, 12);
                 haptics.heavy();
 
-                // Sync to Firebase if connected
+                // Sync to Firebase if connected - remove enemy
                 if (multiplayerState.connected) {
                     multiplayer.updateLeaderboard();
+                    if (this.id) {
+                        multiplayer.removeEnemy(this.id);
+                    }
                 }
             } else if (this.velocityY < 0 && this.y > player.y + player.height / 2) {
                 // Enemy hit player's feet from below while moving upward - kill enemy
@@ -1617,13 +1692,21 @@ class JumpingEnemy extends Enemy {
                 screenShake(3, 10);
                 haptics.medium();
 
-                // Sync to Firebase if connected
+                // Sync to Firebase if connected - remove enemy
                 if (multiplayerState.connected) {
                     multiplayer.updateLeaderboard();
+                    if (this.id) {
+                        multiplayer.removeEnemy(this.id);
+                    }
                 }
             } else {
                 player.hit();
             }
+        }
+
+        // Sync enemy position to Firebase (throttled)
+        if (this.alive && multiplayerState.connected && this.id) {
+            multiplayer.syncEnemyState(this);
         }
     }
 
@@ -1713,12 +1796,22 @@ class Portal {
         if (this.spawning) {
             this.spawnProgress += 0.05;
             if (this.spawnProgress >= 1) {
-                // Spawn complete - create enemy
-                if (this.enemyType === 'jumping') {
-                    enemies.push(new JumpingEnemy(this.x + this.width / 2 - CONFIG.ENEMY_SIZE / 2, this.y - CONFIG.ENEMY_SIZE));
+                // Spawn complete - create enemy via Firebase
+                const spawnX = this.x + this.width / 2 - CONFIG.ENEMY_SIZE / 2;
+                const spawnY = this.y - CONFIG.ENEMY_SIZE;
+
+                if (multiplayerState.connected) {
+                    // Spawn via Firebase
+                    multiplayer.spawnEnemy(spawnX, spawnY, this.enemyType);
                 } else {
-                    enemies.push(new Enemy(this.x + this.width / 2 - CONFIG.ENEMY_SIZE / 2, this.y - CONFIG.ENEMY_SIZE));
+                    // Single player - spawn locally
+                    if (this.enemyType === 'jumping') {
+                        enemies.push(new JumpingEnemy(spawnX, spawnY));
+                    } else {
+                        enemies.push(new Enemy(spawnX, spawnY));
+                    }
                 }
+
                 createParticles(this.x + this.width / 2, this.y, 15, '#9B59B6');
                 sounds.powerUp();
                 this.spawning = false;
