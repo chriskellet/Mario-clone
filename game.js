@@ -2681,34 +2681,50 @@ function initLevel() {
     platforms.push(new Platform(1740, groundY - 180, 80, 20));
     platforms.push(new Platform(2300, groundY - 170, 80, 20));
 
-    // Create enemies on various platforms
-    enemies.push(new Enemy(300, groundY - 140));
-    enemies.push(new Enemy(550, groundY - 150));
-    enemies.push(new Enemy(850, groundY - 160));
-    enemies.push(new Enemy(270, groundY - 260));
-    enemies.push(new Enemy(500, groundY - 280));
-    enemies.push(new Enemy(740, groundY - 300));
-    enemies.push(new Enemy(1100, groundY - 140));
-    enemies.push(new Enemy(1460, groundY - 320));
-    enemies.push(new Enemy(1950, groundY - 160));
-    enemies.push(new Enemy(2200, groundY - 160));
+    // In multiplayer, don't create enemies directly - spawn master will handle via portals
+    // In single player, create some initial enemies
+    if (!multiplayerState.connected) {
+        // Create enemies on various platforms
+        enemies.push(new Enemy(300, groundY - 140));
+        enemies.push(new Enemy(550, groundY - 150));
+        enemies.push(new Enemy(850, groundY - 160));
+        enemies.push(new Enemy(270, groundY - 260));
+        enemies.push(new Enemy(500, groundY - 280));
+        enemies.push(new Enemy(740, groundY - 300));
+        enemies.push(new Enemy(1100, groundY - 140));
+        enemies.push(new Enemy(1460, groundY - 320));
+        enemies.push(new Enemy(1950, groundY - 160));
+        enemies.push(new Enemy(2200, groundY - 160));
 
-    // Add jumping enemies (more challenging)
-    enemies.push(new JumpingEnemy(1200, groundY - 140));
-    enemies.push(new JumpingEnemy(1650, groundY - 280));
-    enemies.push(new JumpingEnemy(2350, groundY - 140));
+        // Add jumping enemies (more challenging)
+        enemies.push(new JumpingEnemy(1200, groundY - 140));
+        enemies.push(new JumpingEnemy(1650, groundY - 280));
+        enemies.push(new JumpingEnemy(2350, groundY - 140));
 
-    // Add turtle enemies (slow but with shell mechanics)
-    enemies.push(new TurtleEnemy(700, groundY - 140));
-    enemies.push(new TurtleEnemy(1000, groundY - 290));
-    enemies.push(new TurtleEnemy(1800, groundY - 140));
-    enemies.push(new TurtleEnemy(2500, groundY - 310));
+        // Add turtle enemies (slow but with shell mechanics)
+        enemies.push(new TurtleEnemy(700, groundY - 140));
+        enemies.push(new TurtleEnemy(1000, groundY - 290));
+        enemies.push(new TurtleEnemy(1800, groundY - 140));
+        enemies.push(new TurtleEnemy(2500, groundY - 310));
+    }
 
-    // Add enemy spawn portals
+    // Add enemy spawn portals on ground
     portals.push(new Portal(400, groundY - 60, 'normal'));
     portals.push(new Portal(1350, groundY - 60, 'jumping'));
-    portals.push(new Portal(2550, groundY - 60, 'normal'));
-    portals.push(new Portal(900, groundY - 60, 'turtle'));
+    portals.push(new Portal(2550, groundY - 60, 'turtle'));
+
+    // Add portals on lower platforms (~100-140 above ground)
+    portals.push(new Portal(280, groundY - 160, 'normal'));
+    portals.push(new Portal(1070, groundY - 160, 'turtle'));
+
+    // Add portals on mid-level platforms (~220-280 above ground)
+    portals.push(new Portal(440, groundY - 300, 'jumping'));
+    portals.push(new Portal(1440, groundY - 340, 'normal'));
+    portals.push(new Portal(2210, groundY - 310, 'turtle'));
+
+    // Add portals on high platforms (~360-420 above ground)
+    portals.push(new Portal(380, groundY - 420, 'normal'));
+    portals.push(new Portal(1290, groundY - 470, 'jumping'));
 
     // Create coins throughout the level at various heights
     let coinIndex = 0;
