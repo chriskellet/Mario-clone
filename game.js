@@ -1201,7 +1201,7 @@ class Player {
 
     // Check collision with remote players for PvP
     checkRemotePlayerCollisions() {
-        if (!multiplayerState.connected || this.invulnerable) return;
+        if (!multiplayerState.connected) return;
 
         multiplayerState.remotePlayers.forEach((remotePlayer, playerId) => {
             // Skip collision if remote player is invulnerable - let us fall through them
@@ -1213,9 +1213,22 @@ class Player {
                             this.y + this.height > remotePlayer.y;
 
             if (collision) {
+                // Check if remote player is stomping us from above
+                // They must be above our center, and we must not be jumping upward into them
+                if (remotePlayer.y < this.y + this.height / 2 && this.velocityY >= 0) {
+                    // They stomped us! We take damage (hit() will check invulnerability)
+                    this.hit(true);
+                    return; // Exit early after taking damage to avoid other collision checks
+                }
+            }
+
+            // Skip remaining collision checks if we are invulnerable - let us fall through others
+            if (this.invulnerable) return;
+
+            if (collision) {
                 // Check if we're jumping on them (stomp) - ONLY way to deal damage
                 if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2) {
-                    // We stomped them! They take damage
+                    // We stomped them! They take damage on their client
                     this.velocityY = -8; // Bounce
 
                     // Increment combo
