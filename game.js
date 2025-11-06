@@ -1567,6 +1567,9 @@ class Enemy {
                 // Find smallest overlap to determine collision side
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
+                // Check if standing on top of portal (allow walking off)
+                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 5;
+
                 // Resolve collision on the side with smallest overlap
                 if (minOverlap === overlapTop && this.velocityY > 0) {
                     // Landing on top
@@ -1577,12 +1580,12 @@ class Enemy {
                     // Hitting from below
                     this.y = portal.y + portal.height;
                     this.velocityY = 0;
-                } else if (minOverlap === overlapLeft) {
-                    // Hitting from left side
+                } else if (minOverlap === overlapLeft && !standingOnTop) {
+                    // Hitting from left side (but not if standing on top)
                     this.x = portal.x - this.width;
                     this.velocityX *= -1;
-                } else if (minOverlap === overlapRight) {
-                    // Hitting from right side
+                } else if (minOverlap === overlapRight && !standingOnTop) {
+                    // Hitting from right side (but not if standing on top)
                     this.x = portal.x + portal.width;
                     this.velocityX *= -1;
                 }
@@ -1847,6 +1850,9 @@ class JumpingEnemy extends Enemy {
                 // Find smallest overlap to determine collision side
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
+                // Check if standing on top of portal (allow walking off)
+                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 5;
+
                 // Resolve collision on the side with smallest overlap
                 if (minOverlap === overlapTop && this.velocityY > 0) {
                     // Landing on top
@@ -1857,12 +1863,12 @@ class JumpingEnemy extends Enemy {
                     // Hitting from below
                     this.y = portal.y + portal.height;
                     this.velocityY = 0;
-                } else if (minOverlap === overlapLeft) {
-                    // Hitting from left side
+                } else if (minOverlap === overlapLeft && !standingOnTop) {
+                    // Hitting from left side (but not if standing on top)
                     this.x = portal.x - this.width;
                     this.velocityX *= -1;
-                } else if (minOverlap === overlapRight) {
-                    // Hitting from right side
+                } else if (minOverlap === overlapRight && !standingOnTop) {
+                    // Hitting from right side (but not if standing on top)
                     this.x = portal.x + portal.width;
                     this.velocityX *= -1;
                 }
@@ -2212,6 +2218,9 @@ class TurtleEnemy extends Enemy {
                 // Find smallest overlap to determine collision side
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
+                // Check if standing on top of portal (allow walking off)
+                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 5;
+
                 // Resolve collision on the side with smallest overlap
                 if (minOverlap === overlapTop && this.velocityY > 0) {
                     // Landing on top
@@ -2222,12 +2231,12 @@ class TurtleEnemy extends Enemy {
                     // Hitting from below
                     this.y = portal.y + portal.height;
                     this.velocityY = 0;
-                } else if (minOverlap === overlapLeft) {
-                    // Hitting from left side
+                } else if (minOverlap === overlapLeft && !standingOnTop) {
+                    // Hitting from left side (but not if standing on top)
                     this.x = portal.x - this.width;
                     this.velocityX *= -1;
-                } else if (minOverlap === overlapRight) {
-                    // Hitting from right side
+                } else if (minOverlap === overlapRight && !standingOnTop) {
+                    // Hitting from right side (but not if standing on top)
                     this.x = portal.x + portal.width;
                     this.velocityX *= -1;
                 }
