@@ -821,6 +821,40 @@ class Player {
             }
         });
 
+        // Portal (pipe) collisions - solid obstacles
+        portals.forEach(portal => {
+            if (portal.checkCollision(this)) {
+                // Calculate overlap on each axis
+                const overlapLeft = (this.x + this.width) - portal.x;
+                const overlapRight = (portal.x + portal.width) - this.x;
+                const overlapTop = (this.y + this.height) - portal.y;
+                const overlapBottom = (portal.y + portal.height) - this.y;
+
+                // Find the smallest overlap
+                const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+                // Push player out on the side with smallest overlap
+                if (minOverlap === overlapTop && this.velocityY > 0) {
+                    // Landing on top of portal
+                    this.y = portal.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                } else if (minOverlap === overlapBottom && this.velocityY < 0) {
+                    // Hitting portal from below
+                    this.y = portal.y + portal.height;
+                    this.velocityY = 0;
+                } else if (minOverlap === overlapLeft) {
+                    // Hitting from left
+                    this.x = portal.x - this.width;
+                    this.velocityX = 0;
+                } else if (minOverlap === overlapRight) {
+                    // Hitting from right
+                    this.x = portal.x + portal.width;
+                    this.velocityX = 0;
+                }
+            }
+        });
+
         // Detect landing - trigger haptic when transitioning from air to ground
         if (this.onGround && !this.wasOnGround) {
             haptics.medium();  // Medium haptic on landing
@@ -1624,31 +1658,64 @@ class Portal {
         this.width = 40;
         this.height = 60;
         this.enemyType = enemyType; // 'normal' or 'jumping'
-        this.spawnCooldown = 0;
+        this.spawnCooldown = 180 + Math.random() * 180; // 3-6 seconds startup delay
         this.animation = 0;
+        this.spawning = false; // Spawning animation state
+        this.spawnProgress = 0; // 0 to 1
     }
 
     update() {
         this.animation += 0.1;
+
+        // Update spawn animation
+        if (this.spawning) {
+            this.spawnProgress += 0.05;
+            if (this.spawnProgress >= 1) {
+                // Spawn complete - create enemy
+                if (this.enemyType === 'jumping') {
+                    enemies.push(new JumpingEnemy(this.x + this.width / 2 - CONFIG.ENEMY_SIZE / 2, this.y - CONFIG.ENEMY_SIZE));
+                } else {
+                    enemies.push(new Enemy(this.x + this.width / 2 - CONFIG.ENEMY_SIZE / 2, this.y - CONFIG.ENEMY_SIZE));
+                }
+                createParticles(this.x + this.width / 2, this.y, 15, '#9B59B6');
+                sounds.powerUp();
+                this.spawning = false;
+                this.spawnProgress = 0;
+                this.spawnCooldown = 420 + Math.random() * 300; // 7-12 seconds between spawns
+            }
+            return;
+        }
+
         this.spawnCooldown--;
 
-        // Spawn enemy if cooldown is ready
+        // Check if ready to start spawning
         if (this.spawnCooldown <= 0) {
-            const nearbyEnemies = enemies.filter(e => {
-                return e.alive && Math.abs(e.x - this.x) < 150 && Math.abs(e.y - this.y) < 150;
-            });
-
-            // Only spawn if less than 2 enemies nearby
-            if (nearbyEnemies.length < 2) {
+            // Count total enemies of this type globally
+            const totalEnemies = enemies.filter(e => {
                 if (this.enemyType === 'jumping') {
-                    enemies.push(new JumpingEnemy(this.x, this.y - 50));
+                    return e instanceof JumpingEnemy && e.alive;
                 } else {
-                    enemies.push(new Enemy(this.x, this.y - 50));
+                    return !(e instanceof JumpingEnemy) && e.alive;
                 }
-                createParticles(this.x + this.width / 2, this.y + this.height / 2, 10, '#9B59B6');
-                this.spawnCooldown = 300 + Math.random() * 300; // 5-10 seconds
+            }).length;
+
+            // Limit total enemies per type (max 5 of each type globally)
+            const maxEnemies = 5;
+            if (totalEnemies < maxEnemies) {
+                this.spawning = true;
+                this.spawnProgress = 0;
+            } else {
+                // Check again in 2 seconds
+                this.spawnCooldown = 120;
             }
         }
+    }
+
+    checkCollision(obj) {
+        return this.x < obj.x + obj.width &&
+               this.x + this.width > obj.x &&
+               this.y < obj.y + obj.height &&
+               this.y + this.height > obj.y;
     }
 
     draw() {
@@ -1661,34 +1728,60 @@ class Portal {
         ctx.fillStyle = '#2ECC40';
         ctx.fillRect(screenX, screenY, this.width, this.height);
 
-        // Pipe rim
+        // Pipe rim at top
         ctx.fillStyle = '#01FF70';
-        ctx.fillRect(screenX - 5, screenY, this.width + 10, 8);
-        ctx.fillRect(screenX - 5, screenY + this.height - 8, this.width + 10, 8);
+        ctx.fillRect(screenX - 5, screenY - 5, this.width + 10, 10);
 
-        // Highlights
+        // Pipe rim at bottom
+        ctx.fillStyle = '#239B2E';
+        ctx.fillRect(screenX - 3, screenY + this.height - 3, this.width + 6, 3);
+
+        // Highlights on sides
         ctx.fillStyle = '#3D9970';
-        ctx.fillRect(screenX + 5, screenY + 10, 5, this.height - 20);
+        ctx.fillRect(screenX + 5, screenY + 8, 3, this.height - 10);
+        ctx.fillRect(screenX + this.width - 8, screenY + 8, 3, this.height - 10);
 
-        // Dark opening
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        // Dark opening at top (ellipse)
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
         ctx.beginPath();
-        ctx.ellipse(screenX + this.width / 2, screenY + 15, this.width / 3, 10, 0, 0, Math.PI * 2);
+        ctx.ellipse(screenX + this.width / 2, screenY, this.width / 2.5, 8, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Portal glow (pulsing)
+        // Portal glow (pulsing) inside opening
         const glowIntensity = Math.sin(this.animation) * 0.3 + 0.5;
-        ctx.fillStyle = `rgba(155, 89, 182, ${glowIntensity * 0.5})`;
+        ctx.fillStyle = `rgba(155, 89, 182, ${glowIntensity * 0.6})`;
         ctx.beginPath();
-        ctx.ellipse(screenX + this.width / 2, screenY + 15, this.width / 2.5, 12, 0, 0, Math.PI * 2);
+        ctx.ellipse(screenX + this.width / 2, screenY, this.width / 3, 6, 0, 0, Math.PI * 2);
         ctx.fill();
+
+        // Spawning animation - enemy rising from pipe
+        if (this.spawning && this.spawnProgress > 0) {
+            ctx.save();
+            const spawnY = screenY - (CONFIG.ENEMY_SIZE * this.spawnProgress);
+            const alpha = this.spawnProgress;
+            ctx.globalAlpha = alpha;
+
+            // Draw emerging enemy preview
+            const enemyColor = this.enemyType === 'jumping' ? '#FF6B6B' : '#8B4513';
+            ctx.fillStyle = enemyColor;
+            ctx.beginPath();
+            ctx.arc(screenX + this.width / 2, spawnY, CONFIG.ENEMY_SIZE / 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Spawn particles
+            if (Math.random() < 0.3) {
+                createParticles(screenX + this.width / 2 + gameState.camera.x, spawnY + gameState.camera.y, 1, '#9B59B6');
+            }
+
+            ctx.restore();
+        }
 
         // Type indicator
         if (this.enemyType === 'jumping') {
             ctx.fillStyle = '#FF6B6B';
-            ctx.font = 'bold 12px Arial';
+            ctx.font = 'bold 16px Arial';
             ctx.textAlign = 'center';
-            ctx.fillText('!', screenX + this.width / 2, screenY + 30);
+            ctx.fillText('!', screenX + this.width / 2, screenY + this.height / 2);
         }
 
         ctx.restore();
