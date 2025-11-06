@@ -148,6 +148,7 @@ class MultiplayerManager {
                         existingPlayer.direction = data.direction || 1;
                         existingPlayer.score = data.score || 0;
                         existingPlayer.health = data.health || 2;
+                        existingPlayer.invulnerable = data.invulnerable || false;
                     } else {
                         // New player - initialize with current position
                         multiplayerState.remotePlayers.set(id, {
@@ -160,6 +161,7 @@ class MultiplayerManager {
                             direction: data.direction || 1,
                             score: data.score || 0,
                             health: data.health || 2,
+                            invulnerable: data.invulnerable || false,
                         });
                     }
                 }
@@ -228,7 +230,7 @@ class MultiplayerManager {
         });
     }
 
-    async syncPlayerPosition(x, y, direction, health) {
+    async syncPlayerPosition(x, y, direction, health, invulnerable) {
         if (!multiplayerState.connected || !multiplayerState.playerRef) return;
 
         const now = Date.now();
@@ -243,6 +245,7 @@ class MultiplayerManager {
                 direction,
                 score: gameState.score,
                 health: health || 2,
+                invulnerable: invulnerable || false,
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
         } catch (error) {
@@ -306,9 +309,85 @@ class MultiplayerManager {
                 score: gameState.score,
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
+
+            // Update all-time leaderboard if score is high enough
+            this.updateAllTimeLeaderboard(multiplayerState.playerName, gameState.score);
         } catch (error) {
             console.error('Failed to update leaderboard:', error);
         }
+    }
+
+    async updateAllTimeLeaderboard(playerName, score) {
+        if (!this.db) return;
+
+        try {
+            const allTimeRef = this.db.ref('allTimeLeaderboard');
+
+            // Use transaction to ensure atomic update
+            await allTimeRef.transaction((currentData) => {
+                if (!currentData) {
+                    currentData = {};
+                }
+
+                // Find if player already exists
+                let existingKey = null;
+                let existingScore = 0;
+
+                Object.entries(currentData).forEach(([key, data]) => {
+                    if (data.name === playerName) {
+                        existingKey = key;
+                        existingScore = data.score || 0;
+                    }
+                });
+
+                // Update if new score is higher
+                if (!existingKey || score > existingScore) {
+                    const key = existingKey || this.db.ref().child('allTimeLeaderboard').push().key;
+                    currentData[key] = {
+                        name: playerName,
+                        score: score,
+                        timestamp: Date.now(),
+                    };
+                }
+
+                return currentData;
+            });
+        } catch (error) {
+            console.error('Failed to update all-time leaderboard:', error);
+        }
+    }
+
+    loadAllTimeLeaderboard() {
+        if (!this.db) return;
+
+        const allTimeRef = this.db.ref('allTimeLeaderboard');
+        allTimeRef.orderByChild('score').limitToLast(10).on('value', (snapshot) => {
+            const allTimeList = document.getElementById('all-time-list');
+            if (!allTimeList) return;
+
+            const data = snapshot.val();
+            if (!data) {
+                allTimeList.innerHTML = '<div class="all-time-entry"><span class="name">No scores yet!</span></div>';
+                return;
+            }
+
+            // Convert to array and sort by score descending
+            const entries = Object.values(data).sort((a, b) => b.score - a.score).slice(0, 10);
+
+            // Render top 10
+            allTimeList.innerHTML = entries.map((entry, index) => `
+                <div class="all-time-entry">
+                    <span class="rank">${this.getRankEmoji(index + 1)}</span>
+                    <span class="name">${entry.name}</span>
+                    <span class="score">${entry.score}</span>
+                </div>
+            `).join('');
+        });
+    }
+
+    getRankEmoji(rank) {
+        const emojis = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+        return emojis[rank - 1] || `#${rank}`;
     }
 
     updateLeaderboardUI() {
@@ -455,6 +534,71 @@ function screenShake(intensity, duration) {
     gameState.screenShake.duration = duration;
 }
 
+// Floating Text System (for combos and score popups)
+class FloatingText {
+    constructor(x, y, text, color, size = 20) {
+        this.x = x;
+        this.y = y;
+        this.text = text;
+        this.color = color;
+        this.size = size;
+        this.vy = -2; // Float upward
+        this.lifetime = 60; // 1 second at 60fps
+        this.age = 0;
+        this.alpha = 1;
+        this.scale = 0.5; // Start small
+    }
+
+    update() {
+        this.y += this.vy;
+        this.vy += 0.05; // Slight deceleration
+        this.age++;
+
+        // Scale animation: grow then fade
+        if (this.age < 10) {
+            this.scale += 0.1; // Grow to full size
+        } else {
+            this.alpha = 1 - ((this.age - 10) / (this.lifetime - 10));
+        }
+
+        return this.age < this.lifetime;
+    }
+
+    draw() {
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        ctx.save();
+        ctx.globalAlpha = this.alpha;
+        ctx.font = `bold ${this.size * this.scale}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Outline for better visibility
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 3;
+        ctx.strokeText(this.text, screenX, screenY);
+
+        ctx.fillStyle = this.color;
+        ctx.fillText(this.text, screenX, screenY);
+        ctx.restore();
+    }
+}
+
+let floatingTexts = [];
+
+function createFloatingText(x, y, text, color, size = 20) {
+    floatingTexts.push(new FloatingText(x, y, text, color, size));
+}
+
+function updateFloatingTexts() {
+    floatingTexts = floatingTexts.filter(t => t.update());
+}
+
+function drawFloatingTexts() {
+    floatingTexts.forEach(t => t.draw());
+}
+
 // Haptic Feedback System
 const haptics = {
     supported: 'vibrate' in navigator,
@@ -581,9 +725,14 @@ class Player {
         this.outOfLives = false;
         this.respawnCountdown = 0;
         this.hasUsedContinue = false;
+        this.combo = 0; // Combo counter for consecutive kills
+        this.maxCombo = 10; // Cap at 10x multiplier
     }
 
     update() {
+        // Don't update if out of lives (paused for decision)
+        if (this.outOfLives) return;
+
         // Horizontal movement with momentum
         if (gameState.keys['ArrowLeft'] || gameState.touchControls.left) {
             this.velocityX -= CONFIG.ACCELERATION;
@@ -675,6 +824,11 @@ class Player {
         // Detect landing - trigger haptic when transitioning from air to ground
         if (this.onGround && !this.wasOnGround) {
             haptics.medium();  // Medium haptic on landing
+
+            // Reset combo when landing
+            if (this.combo > 0) {
+                this.combo = 0;
+            }
         }
 
         // Check for PvP collisions
@@ -697,6 +851,13 @@ class Player {
         const screenX = this.x - gameState.camera.x;
         const screenY = this.y - gameState.camera.y;
 
+        // Scale based on health (small Mario = 0.75x size)
+        const scale = this.health > 1 ? 1.0 : 0.75;
+        const scaledWidth = this.width * scale;
+        const scaledHeight = this.height * scale;
+        // Adjust Y position so small Mario stands on ground properly
+        const yOffset = this.health > 1 ? 0 : (this.height - scaledHeight);
+
         // Blinking effect when invulnerable
         if (this.invulnerable && Math.floor(Date.now() / 100) % 2 === 0) {
             ctx.globalAlpha = 0.5;
@@ -705,64 +866,67 @@ class Player {
         // Shadow
         ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
         ctx.beginPath();
-        ctx.ellipse(screenX + this.width / 2, screenY + this.height + 5, this.width / 2.5, 5, 0, 0, Math.PI * 2);
+        ctx.ellipse(screenX + scaledWidth / 2, screenY + yOffset + scaledHeight + 5, scaledWidth / 2.5, 5, 0, 0, Math.PI * 2);
         ctx.fill();
 
         // Body (shirt) - use color palette
         ctx.fillStyle = this.colorPalette.shirt;
         ctx.beginPath();
-        ctx.roundRect(screenX + 5, screenY + 20, this.width - 10, this.height - 30, 5);
+        ctx.roundRect(screenX + 5 * scale, screenY + yOffset + 20 * scale, scaledWidth - 10 * scale, scaledHeight - 30 * scale, 5 * scale);
         ctx.fill();
 
         // Overalls - use color palette
         ctx.fillStyle = this.colorPalette.overalls;
-        ctx.fillRect(screenX + 8, screenY + 25, this.width - 16, this.height - 35);
+        ctx.fillRect(screenX + 8 * scale, screenY + yOffset + 25 * scale, scaledWidth - 16 * scale, scaledHeight - 35 * scale);
 
         // Head (skin color) - use color palette
         ctx.fillStyle = this.colorPalette.skin;
         ctx.beginPath();
-        ctx.arc(screenX + this.width / 2, screenY + 12, 12, 0, Math.PI * 2);
+        ctx.arc(screenX + scaledWidth / 2, screenY + yOffset + 12 * scale, 12 * scale, 0, Math.PI * 2);
         ctx.fill();
 
         // Hat - use color palette
         ctx.fillStyle = this.colorPalette.shirt;
         ctx.beginPath();
-        ctx.ellipse(screenX + this.width / 2, screenY + 8, 14, 8, 0, Math.PI, 2 * Math.PI);
+        ctx.ellipse(screenX + scaledWidth / 2, screenY + yOffset + 8 * scale, 14 * scale, 8 * scale, 0, Math.PI, 2 * Math.PI);
         ctx.fill();
-        ctx.fillRect(screenX + this.width / 2 - 8, screenY + 4, 16, 6);
+        ctx.fillRect(screenX + scaledWidth / 2 - 8 * scale, screenY + yOffset + 4 * scale, 16 * scale, 6 * scale);
 
         // Hat logo (M)
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 8px Arial';
+        ctx.font = `bold ${8 * scale}px Arial`;
         ctx.textAlign = 'center';
-        ctx.fillText('M', screenX + this.width / 2, screenY + 9);
+        ctx.fillText('M', screenX + scaledWidth / 2, screenY + yOffset + 9 * scale);
 
         // Eyes
         ctx.fillStyle = 'black';
-        const eyeOffset = this.direction > 0 ? 2 : -2;
-        ctx.fillRect(screenX + this.width / 2 - 3 + eyeOffset, screenY + 13, 2, 2);
-        ctx.fillRect(screenX + this.width / 2 + 3 + eyeOffset, screenY + 13, 2, 2);
+        const eyeOffset = this.direction > 0 ? 2 * scale : -2 * scale;
+        ctx.fillRect(screenX + scaledWidth / 2 - 3 * scale + eyeOffset, screenY + yOffset + 13 * scale, 2 * scale, 2 * scale);
+        ctx.fillRect(screenX + scaledWidth / 2 + 3 * scale + eyeOffset, screenY + yOffset + 13 * scale, 2 * scale, 2 * scale);
 
         // Mustache
         ctx.fillStyle = '#5C3C1C';
-        ctx.fillRect(screenX + this.width / 2 - 6, screenY + 17, 12, 3);
+        ctx.fillRect(screenX + scaledWidth / 2 - 6 * scale, screenY + yOffset + 17 * scale, 12 * scale, 3 * scale);
 
         // Buttons
         ctx.fillStyle = '#FFD700';
         ctx.beginPath();
-        ctx.arc(screenX + this.width / 2, screenY + 30, 2, 0, Math.PI * 2);
+        ctx.arc(screenX + scaledWidth / 2, screenY + yOffset + 30 * scale, 2 * scale, 0, Math.PI * 2);
         ctx.fill();
 
         // Shoes (brown)
         ctx.fillStyle = '#5C3C1C';
-        ctx.fillRect(screenX + 5, screenY + this.height - 8, 12, 8);
-        ctx.fillRect(screenX + this.width - 17, screenY + this.height - 8, 12, 8);
+        ctx.fillRect(screenX + 5 * scale, screenY + yOffset + scaledHeight - 8 * scale, 12 * scale, 8 * scale);
+        ctx.fillRect(screenX + scaledWidth - 17 * scale, screenY + yOffset + scaledHeight - 8 * scale, 12 * scale, 8 * scale);
 
         ctx.restore();
     }
 
     hit(fromPlayer = false) {
         if (this.invulnerable) return;
+
+        // Reset combo on taking damage
+        this.combo = 0;
 
         // Health system: 2 = big, 1 = small
         if (this.health > 1) {
@@ -829,6 +993,9 @@ class Player {
         if (!multiplayerState.connected || this.invulnerable) return;
 
         multiplayerState.remotePlayers.forEach((remotePlayer, playerId) => {
+            // Skip collision if remote player is invulnerable - let us fall through them
+            if (remotePlayer.invulnerable) return;
+
             const collision = this.x < remotePlayer.x + CONFIG.PLAYER_SIZE &&
                             this.x + this.width > remotePlayer.x &&
                             this.y < remotePlayer.y + CONFIG.PLAYER_SIZE &&
@@ -839,8 +1006,27 @@ class Player {
                 if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2) {
                     // We stomped them! They take damage
                     this.velocityY = -8; // Bounce
-                    gameState.score += 200; // Bonus for stomping player
+
+                    // Increment combo
+                    this.combo = Math.min(this.combo + 1, this.maxCombo);
+
+                    // Apply multiplier to score
+                    const baseScore = 200;
+                    const multiplier = this.combo;
+                    const scoreGained = baseScore * multiplier;
+                    gameState.score += scoreGained;
                     document.getElementById('score').textContent = gameState.score;
+
+                    // Show floating text with combo
+                    const comboX = remotePlayer.x + CONFIG.PLAYER_SIZE / 2;
+                    const comboY = remotePlayer.y;
+
+                    if (multiplier > 1) {
+                        const color = this.getComboColor(multiplier);
+                        createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                    }
+                    createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
                     sounds.stomp();
                     haptics.success();
                     multiplayer.updateLeaderboard();
@@ -854,6 +1040,15 @@ class Player {
                 }
             }
         });
+    }
+
+    getComboColor(combo) {
+        // Color progression for combos
+        if (combo >= 8) return '#FF00FF'; // Magenta for 8-10x
+        if (combo >= 6) return '#FF0000'; // Red for 6-7x
+        if (combo >= 4) return '#FF6600'; // Orange for 4-5x
+        if (combo >= 2) return '#FFFF00'; // Yellow for 2-3x
+        return '#FFFFFF'; // White for 1x
     }
 }
 
@@ -1032,12 +1227,36 @@ class Enemy {
                 // Player jumped on enemy
                 this.alive = false;
                 player.velocityY = -8;
-                gameState.score += 100;
+
+                // Increment combo
+                player.combo = Math.min(player.combo + 1, player.maxCombo);
+
+                // Apply multiplier to score
+                const baseScore = 100;
+                const multiplier = player.combo;
+                const scoreGained = baseScore * multiplier;
+                gameState.score += scoreGained;
                 document.getElementById('score').textContent = gameState.score;
+
+                // Show floating text with combo
+                const comboX = this.x + this.width / 2;
+                const comboY = this.y;
+
+                if (multiplier > 1) {
+                    const color = player.getComboColor(multiplier);
+                    createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                }
+                createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
                 sounds.stomp();
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 12, '#8B4513');
                 screenShake(3, 10);
                 haptics.heavy();  // Heavy haptic for stomping enemy
+
+                // Update leaderboard if in multiplayer
+                if (multiplayerState.connected) {
+                    multiplayer.updateLeaderboard();
+                }
             } else {
                 // Enemy hit player from side or below
                 player.hit();
@@ -1111,6 +1330,268 @@ class Enemy {
         ctx.fillStyle = '#8B4513';
         ctx.fillRect(screenX + this.width / 2 - 10, screenY + this.height - 6, 7, 6);
         ctx.fillRect(screenX + this.width / 2 + 3, screenY + this.height - 6, 7, 6);
+
+        ctx.restore();
+    }
+}
+
+// Jumping Enemy Class
+class JumpingEnemy extends Enemy {
+    constructor(x, y) {
+        super(x, y);
+        this.jumpCooldown = 0;
+        this.jumpInterval = 60 + Math.random() * 60; // Jump every 60-120 frames
+        this.color = '#FF6B6B'; // Red color to distinguish from regular enemies
+    }
+
+    update() {
+        if (!this.alive) {
+            // Check for respawn
+            if (this.respawnTime && Date.now() >= this.respawnTime) {
+                this.alive = true;
+                this.respawnTime = null;
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
+            }
+            return;
+        }
+
+        // Apply gravity
+        this.velocityY += CONFIG.GRAVITY;
+        if (this.velocityY > CONFIG.MAX_FALL_SPEED) {
+            this.velocityY = CONFIG.MAX_FALL_SPEED;
+        }
+
+        // Horizontal movement
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        // Reset onGround flag
+        this.onGround = false;
+
+        // World bounds
+        if (this.x < 0) {
+            this.x = 0;
+            this.velocityX *= -1;
+        }
+        if (this.x + this.width > CONFIG.WORLD_WIDTH) {
+            this.x = CONFIG.WORLD_WIDTH - this.width;
+            this.velocityX *= -1;
+        }
+
+        // Ground collision
+        const groundY = CONFIG.WORLD_HEIGHT - 50;
+        if (this.y + this.height >= groundY) {
+            this.y = groundY - this.height;
+            this.velocityY = 0;
+            this.onGround = true;
+        }
+
+        // Platform collisions
+        platforms.forEach(platform => {
+            if (this.checkCollision(platform)) {
+                if (this.velocityY > 0 && this.y + this.height - this.velocityY <= platform.y) {
+                    this.y = platform.y - this.height;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                } else if (Math.abs(this.velocityY) < 2) {
+                    this.velocityX *= -1;
+                }
+            }
+        });
+
+        // Jumping behavior
+        if (this.onGround) {
+            this.jumpCooldown--;
+            if (this.jumpCooldown <= 0) {
+                // Jump!
+                this.velocityY = -10;
+                this.jumpCooldown = this.jumpInterval;
+                createParticles(this.x + this.width / 2, this.y + this.height, 5, this.color);
+            }
+        }
+
+        // Check collision with player
+        if (this.alive && player.checkCollision(this)) {
+            if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
+                // Player stomped enemy
+                this.alive = false;
+                this.respawnTime = Date.now() + 5000; // Respawn in 5 seconds
+                player.velocityY = -10; // Higher bounce for jumping enemy
+
+                // Increment combo
+                player.combo = Math.min(player.combo + 1, player.maxCombo);
+
+                // Apply multiplier to score (jumping enemies worth more)
+                const baseScore = 150;
+                const multiplier = player.combo;
+                const scoreGained = baseScore * multiplier;
+                gameState.score += scoreGained;
+                document.getElementById('score').textContent = gameState.score;
+
+                // Show floating text with combo
+                const comboX = this.x + this.width / 2;
+                const comboY = this.y;
+
+                if (multiplier > 1) {
+                    const color = player.getComboColor(multiplier);
+                    createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                }
+                createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
+                sounds.stomp();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
+                screenShake(4, 12);
+                haptics.heavy();
+
+                // Sync to Firebase if connected
+                if (multiplayerState.connected) {
+                    multiplayer.updateLeaderboard();
+                }
+            } else {
+                player.hit();
+            }
+        }
+    }
+
+    draw() {
+        if (!this.alive) return;
+
+        ctx.save();
+
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        // Shadow
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+        ctx.beginPath();
+        ctx.ellipse(screenX + this.width / 2, screenY + this.height + 3, this.width / 2.5, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Body (red mushroom with legs)
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2, screenY + this.height / 3, this.width / 2.2, 0, Math.PI, true);
+        ctx.fill();
+
+        ctx.fillStyle = '#FF8888';
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2, screenY + this.height / 3, this.width / 2.2, 0, Math.PI);
+        ctx.fill();
+
+        // Spots
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2 - 8, screenY + 8, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2 + 8, screenY + 8, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Stem (shorter for jumping enemy)
+        ctx.fillStyle = '#FFE4B5';
+        ctx.fillRect(screenX + this.width / 2 - 5, screenY + this.height / 3, 10, this.height / 2.5);
+
+        // Eyes (wider)
+        ctx.fillStyle = 'black';
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2 - 7, screenY + this.height / 2, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(screenX + this.width / 2 + 7, screenY + this.height / 2, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Spring legs (to show it jumps)
+        ctx.strokeStyle = '#444';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(screenX + this.width / 2 - 8, screenY + this.height - 8);
+        ctx.lineTo(screenX + this.width / 2 - 10, screenY + this.height - 4);
+        ctx.lineTo(screenX + this.width / 2 - 8, screenY + this.height);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenX + this.width / 2 + 8, screenY + this.height - 8);
+        ctx.lineTo(screenX + this.width / 2 + 10, screenY + this.height - 4);
+        ctx.lineTo(screenX + this.width / 2 + 8, screenY + this.height);
+        ctx.stroke();
+
+        ctx.restore();
+    }
+}
+
+// Enemy Portal Class (spawns enemies)
+class Portal {
+    constructor(x, y, enemyType = 'normal') {
+        this.x = x;
+        this.y = y;
+        this.width = 40;
+        this.height = 60;
+        this.enemyType = enemyType; // 'normal' or 'jumping'
+        this.spawnCooldown = 0;
+        this.animation = 0;
+    }
+
+    update() {
+        this.animation += 0.1;
+        this.spawnCooldown--;
+
+        // Spawn enemy if cooldown is ready
+        if (this.spawnCooldown <= 0) {
+            const nearbyEnemies = enemies.filter(e => {
+                return e.alive && Math.abs(e.x - this.x) < 150 && Math.abs(e.y - this.y) < 150;
+            });
+
+            // Only spawn if less than 2 enemies nearby
+            if (nearbyEnemies.length < 2) {
+                if (this.enemyType === 'jumping') {
+                    enemies.push(new JumpingEnemy(this.x, this.y - 50));
+                } else {
+                    enemies.push(new Enemy(this.x, this.y - 50));
+                }
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 10, '#9B59B6');
+                this.spawnCooldown = 300 + Math.random() * 300; // 5-10 seconds
+            }
+        }
+    }
+
+    draw() {
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+
+        ctx.save();
+
+        // Pipe body (green)
+        ctx.fillStyle = '#2ECC40';
+        ctx.fillRect(screenX, screenY, this.width, this.height);
+
+        // Pipe rim
+        ctx.fillStyle = '#01FF70';
+        ctx.fillRect(screenX - 5, screenY, this.width + 10, 8);
+        ctx.fillRect(screenX - 5, screenY + this.height - 8, this.width + 10, 8);
+
+        // Highlights
+        ctx.fillStyle = '#3D9970';
+        ctx.fillRect(screenX + 5, screenY + 10, 5, this.height - 20);
+
+        // Dark opening
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.beginPath();
+        ctx.ellipse(screenX + this.width / 2, screenY + 15, this.width / 3, 10, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Portal glow (pulsing)
+        const glowIntensity = Math.sin(this.animation) * 0.3 + 0.5;
+        ctx.fillStyle = `rgba(155, 89, 182, ${glowIntensity * 0.5})`;
+        ctx.beginPath();
+        ctx.ellipse(screenX + this.width / 2, screenY + 15, this.width / 2.5, 12, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Type indicator
+        if (this.enemyType === 'jumping') {
+            ctx.fillStyle = '#FF6B6B';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', screenX + this.width / 2, screenY + 30);
+        }
 
         ctx.restore();
     }
@@ -1266,6 +1747,7 @@ let player;
 let enemies = [];
 let coins = [];
 let platforms = [];
+let portals = [];
 
 // Camera system
 function updateCamera() {
@@ -1293,6 +1775,7 @@ function initLevel() {
     enemies = [];
     coins = [];
     platforms = [];
+    portals = [];
     particles = [];
     gameState.camera = { x: 0, y: 0 };
     gameState.screenShake = { intensity: 0, duration: 0 };
@@ -1354,6 +1837,16 @@ function initLevel() {
     enemies.push(new Enemy(1460, groundY - 320));
     enemies.push(new Enemy(1950, groundY - 160));
     enemies.push(new Enemy(2200, groundY - 160));
+
+    // Add jumping enemies (more challenging)
+    enemies.push(new JumpingEnemy(1200, groundY - 140));
+    enemies.push(new JumpingEnemy(1650, groundY - 280));
+    enemies.push(new JumpingEnemy(2350, groundY - 140));
+
+    // Add enemy spawn portals
+    portals.push(new Portal(400, groundY - 60, 'normal'));
+    portals.push(new Portal(1350, groundY - 60, 'jumping'));
+    portals.push(new Portal(2550, groundY - 60, 'normal'));
 
     // Create coins throughout the level at various heights
     let coinIndex = 0;
@@ -1423,6 +1916,12 @@ function gameLoop() {
     // Update and draw platforms
     platforms.forEach(platform => platform.draw());
 
+    // Update and draw portals
+    portals.forEach(portal => {
+        portal.update();
+        portal.draw();
+    });
+
     // Update and draw coins
     coins.forEach(coin => {
         coin.update();
@@ -1441,7 +1940,7 @@ function gameLoop() {
 
     // Sync player position and health to Firebase (throttled)
     if (multiplayerState.connected) {
-        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health);
+        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health, player.invulnerable);
     }
 
     // Interpolate remote player positions for smooth movement
@@ -1459,6 +1958,10 @@ function gameLoop() {
     // Update and draw particles
     updateParticles();
     drawParticles();
+
+    // Update and draw floating texts (combos, scores)
+    updateFloatingTexts();
+    drawFloatingTexts();
 
     // Check win condition
     if (coins.every(coin => coin.collected)) {
@@ -1891,6 +2394,11 @@ restartFromZeroBtn.addEventListener('click', (e) => {
 // Initialize
 setupTouchControls();
 initClouds();
+
+// Load all-time leaderboard on page load
+if (multiplayer.db) {
+    multiplayer.loadAllTimeLeaderboard();
+}
 
 // Add CanvasRenderingContext2D.roundRect polyfill for older browsers
 if (!CanvasRenderingContext2D.prototype.roundRect) {
