@@ -306,9 +306,85 @@ class MultiplayerManager {
                 score: gameState.score,
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
+
+            // Update all-time leaderboard if score is high enough
+            this.updateAllTimeLeaderboard(multiplayerState.playerName, gameState.score);
         } catch (error) {
             console.error('Failed to update leaderboard:', error);
         }
+    }
+
+    async updateAllTimeLeaderboard(playerName, score) {
+        if (!this.db) return;
+
+        try {
+            const allTimeRef = this.db.ref('allTimeLeaderboard');
+
+            // Use transaction to ensure atomic update
+            await allTimeRef.transaction((currentData) => {
+                if (!currentData) {
+                    currentData = {};
+                }
+
+                // Find if player already exists
+                let existingKey = null;
+                let existingScore = 0;
+
+                Object.entries(currentData).forEach(([key, data]) => {
+                    if (data.name === playerName) {
+                        existingKey = key;
+                        existingScore = data.score || 0;
+                    }
+                });
+
+                // Update if new score is higher
+                if (!existingKey || score > existingScore) {
+                    const key = existingKey || this.db.ref().child('allTimeLeaderboard').push().key;
+                    currentData[key] = {
+                        name: playerName,
+                        score: score,
+                        timestamp: Date.now(),
+                    };
+                }
+
+                return currentData;
+            });
+        } catch (error) {
+            console.error('Failed to update all-time leaderboard:', error);
+        }
+    }
+
+    loadAllTimeLeaderboard() {
+        if (!this.db) return;
+
+        const allTimeRef = this.db.ref('allTimeLeaderboard');
+        allTimeRef.orderByChild('score').limitToLast(10).on('value', (snapshot) => {
+            const allTimeList = document.getElementById('all-time-list');
+            if (!allTimeList) return;
+
+            const data = snapshot.val();
+            if (!data) {
+                allTimeList.innerHTML = '<div class="all-time-entry"><span class="name">No scores yet!</span></div>';
+                return;
+            }
+
+            // Convert to array and sort by score descending
+            const entries = Object.values(data).sort((a, b) => b.score - a.score).slice(0, 10);
+
+            // Render top 10
+            allTimeList.innerHTML = entries.map((entry, index) => `
+                <div class="all-time-entry">
+                    <span class="rank">${this.getRankEmoji(index + 1)}</span>
+                    <span class="name">${entry.name}</span>
+                    <span class="score">${entry.score}</span>
+                </div>
+            `).join('');
+        });
+    }
+
+    getRankEmoji(rank) {
+        const emojis = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+        return emojis[rank - 1] || `#${rank}`;
     }
 
     updateLeaderboardUI() {
@@ -2152,6 +2228,11 @@ restartFromZeroBtn.addEventListener('click', (e) => {
 // Initialize
 setupTouchControls();
 initClouds();
+
+// Load all-time leaderboard on page load
+if (multiplayer.db) {
+    multiplayer.loadAllTimeLeaderboard();
+}
 
 // Add CanvasRenderingContext2D.roundRect polyfill for older browsers
 if (!CanvasRenderingContext2D.prototype.roundRect) {
