@@ -68,6 +68,7 @@ const multiplayerState = {
         direction: null,
         health: null,
         invulnerable: null,
+        outOfLives: null,
         score: null,
     },
 };
@@ -166,6 +167,7 @@ class MultiplayerManager {
                         existingPlayer.score = data.score || 0;
                         existingPlayer.health = data.health || 2;
                         existingPlayer.invulnerable = data.invulnerable || false;
+                        existingPlayer.outOfLives = data.outOfLives || false;
                         existingPlayer.timestamp = data.timestamp || Date.now();
                     } else {
                         // New player - initialize with current position
@@ -180,6 +182,7 @@ class MultiplayerManager {
                             score: data.score || 0,
                             health: data.health || 2,
                             invulnerable: data.invulnerable || false,
+                            outOfLives: data.outOfLives || false,
                             timestamp: data.timestamp || Date.now(),
                         });
                     }
@@ -330,7 +333,7 @@ class MultiplayerManager {
         });
     }
 
-    async syncPlayerPosition(x, y, direction, health, invulnerable) {
+    async syncPlayerPosition(x, y, direction, health, invulnerable, outOfLives) {
         if (!multiplayerState.connected || !multiplayerState.playerRef) return;
 
         const now = Date.now();
@@ -347,6 +350,7 @@ class MultiplayerManager {
             direction !== last.direction ||
             health !== last.health ||
             invulnerable !== last.invulnerable ||
+            outOfLives !== last.outOfLives ||
             gameState.score !== last.score;
 
         // Sync if: values changed OR it's time for heartbeat
@@ -370,6 +374,7 @@ class MultiplayerManager {
                 score: gameState.score,
                 health: health || 2,
                 invulnerable: invulnerable || false,
+                outOfLives: outOfLives || false,
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
             });
 
@@ -379,6 +384,7 @@ class MultiplayerManager {
             last.direction = direction;
             last.health = health;
             last.invulnerable = invulnerable;
+            last.outOfLives = outOfLives;
             last.score = gameState.score;
         } catch (error) {
             console.error('Failed to sync position:', error);
@@ -1175,14 +1181,14 @@ class Player {
             this.invulnerable = true;
             // Immediately sync invulnerability state
             if (multiplayerState.connected) {
-                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable, this.outOfLives);
             }
 
             setTimeout(() => {
                 this.invulnerable = false;
                 // Immediately sync when invulnerability ends
                 if (multiplayerState.connected) {
-                    multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+                    multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable, this.outOfLives);
                 }
             }, 2000);
 
@@ -1210,6 +1216,8 @@ class Player {
                 this.deathX = this.x;
                 this.deathY = this.y;
                 this.outOfLives = true;
+                // Sync death state immediately so other players know not to collide
+                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable, this.outOfLives);
                 showOutOfLivesScreen();
             } else {
                 // Single player - game over
@@ -1232,14 +1240,14 @@ class Player {
             this.invulnerable = true;
             // Immediately sync invulnerability state
             if (multiplayerState.connected) {
-                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+                multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable, this.outOfLives);
             }
 
             setTimeout(() => {
                 this.invulnerable = false;
                 // Immediately sync when invulnerability ends
                 if (multiplayerState.connected) {
-                    multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable);
+                    multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable, this.outOfLives);
                 }
             }, 2000);
         }
@@ -1250,8 +1258,11 @@ class Player {
         if (!multiplayerState.connected) return;
 
         multiplayerState.remotePlayers.forEach((remotePlayer, playerId) => {
-            // Skip collision if remote player is invulnerable - let us fall through them
-            if (remotePlayer.invulnerable) return;
+            // Skip collision if remote player is dead or invulnerable
+            if (remotePlayer.outOfLives || remotePlayer.invulnerable) return;
+
+            // Skip collision if we are dead
+            if (this.outOfLives) return;
 
             const collision = this.x < remotePlayer.x + CONFIG.PLAYER_SIZE &&
                             this.x + this.width > remotePlayer.x &&
@@ -1400,6 +1411,12 @@ function drawRemotePlayer(playerData) {
     const colorPalette = playerData.color;
     const width = CONFIG.PLAYER_SIZE;
     const height = CONFIG.PLAYER_SIZE;
+
+    // If player is dead (out of lives), draw gravestone instead
+    if (playerData.outOfLives) {
+        drawGraveMarker(x, y);
+        return;
+    }
 
     const screenX = x - gameState.camera.x;
     const screenY = y - gameState.camera.y;
@@ -2947,7 +2964,7 @@ function gameLoop() {
 
     // Sync player position and health to Firebase (throttled)
     if (multiplayerState.connected) {
-        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health, player.invulnerable);
+        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health, player.invulnerable, player.outOfLives);
     }
 
     // Interpolate remote player positions for smooth movement
@@ -3315,8 +3332,17 @@ function useContinue() {
     player.velocityX = 0;
     player.velocityY = 0;
     player.invulnerable = true;
+
+    // Sync revival state immediately so other players can collide again
+    if (multiplayerState.connected) {
+        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health, player.invulnerable, player.outOfLives);
+    }
+
     setTimeout(() => {
         player.invulnerable = false;
+        if (multiplayerState.connected) {
+            multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health, player.invulnerable, player.outOfLives);
+        }
     }, 3000);
 
     sounds.powerUp();
@@ -3347,8 +3373,17 @@ function restartFromZero() {
     player.velocityX = 0;
     player.velocityY = 0;
     player.invulnerable = true;
+
+    // Sync revival state immediately so other players can collide again
+    if (multiplayerState.connected) {
+        multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health, player.invulnerable, player.outOfLives);
+    }
+
     setTimeout(() => {
         player.invulnerable = false;
+        if (multiplayerState.connected) {
+            multiplayer.syncPlayerPosition(player.x, player.y, player.direction, player.health, player.invulnerable, player.outOfLives);
+        }
     }, 3000);
 
     // Update leaderboard
