@@ -2054,6 +2054,14 @@ class TurtleEnemy extends Enemy {
         this.shellMaxTime = 180; // 3 seconds in shell before popping out
         this.animationFrame = 0; // For leg/arm animation
         this.kickVelocity = 8; // Speed when shell is kicked
+
+        // DEBUG: Log turtle spawn
+        console.log('🐢 TURTLE SPAWNED:', {
+            x: Math.round(x),
+            y: Math.round(y),
+            velocityX: this.velocityX,
+            velocityY: this.velocityY
+        });
         this.isShellSliding = false; // Is the shell sliding?
         this.shellSlideTimer = 0; // How long shell has been sliding
         this.shellMaxSlideTime = 300; // 5 seconds max slide time (at 60fps)
@@ -2225,24 +2233,49 @@ class TurtleEnemy extends Enemy {
                 // Use generous threshold to account for floating point and physics updates
                 const standingOnTop = this.onGround && Math.abs((this.y + this.height) - portal.y) < 10;
 
+                // DEBUG: Log turtle portal collisions
+                if (this instanceof TurtleEnemy) {
+                    console.log('🐢 Turtle-Portal Collision:', {
+                        x: Math.round(this.x),
+                        y: Math.round(this.y),
+                        velocityX: this.velocityX.toFixed(2),
+                        velocityY: this.velocityY.toFixed(2),
+                        onGround: this.onGround,
+                        overlapLeft: overlapLeft.toFixed(2),
+                        overlapRight: overlapRight.toFixed(2),
+                        overlapTop: overlapTop.toFixed(2),
+                        overlapBottom: overlapBottom.toFixed(2),
+                        minOverlap: minOverlap.toFixed(2),
+                        standingOnTop: standingOnTop,
+                        portalX: portal.x,
+                        portalY: portal.y
+                    });
+                }
+
                 // Resolve collision on the side with smallest overlap
                 if (minOverlap === overlapTop && this.velocityY > 0) {
                     // Landing on top
+                    if (this instanceof TurtleEnemy) console.log('  → Landing on top');
                     this.y = portal.y - this.height;
                     this.velocityY = 0;
                     this.onGround = true;
                 } else if (minOverlap === overlapBottom) {
                     // Hitting from below
+                    if (this instanceof TurtleEnemy) console.log('  → Hitting from below');
                     this.y = portal.y + portal.height;
                     this.velocityY = 0;
                 } else if (minOverlap === overlapLeft && !standingOnTop) {
                     // Hitting from left side (but not if standing on top)
+                    if (this instanceof TurtleEnemy) console.log('  → LEFT SIDE HIT - reversing velocity!');
                     this.x = portal.x - this.width;
                     this.velocityX *= -1;
                 } else if (minOverlap === overlapRight && !standingOnTop) {
                     // Hitting from right side (but not if standing on top)
+                    if (this instanceof TurtleEnemy) console.log('  → RIGHT SIDE HIT - reversing velocity!');
                     this.x = portal.x + portal.width;
                     this.velocityX *= -1;
+                } else {
+                    if (this instanceof TurtleEnemy) console.log('  → No action taken (standingOnTop prevented side collision)');
                 }
             }
         });
