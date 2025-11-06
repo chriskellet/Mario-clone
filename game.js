@@ -1467,8 +1467,8 @@ class JumpingEnemy extends Enemy {
         if (this.onGround) {
             this.jumpCooldown--;
             if (this.jumpCooldown <= 0) {
-                // Jump!
-                this.velocityY = -10;
+                // Jump! (reduced height so players can't farm points by standing on platforms)
+                this.velocityY = -7;
                 this.jumpCooldown = this.jumpInterval;
                 createParticles(this.x + this.width / 2, this.y + this.height, 5, this.color);
             }
@@ -1480,7 +1480,7 @@ class JumpingEnemy extends Enemy {
                 // Player stomped enemy
                 this.alive = false;
                 this.respawnTime = Date.now() + 5000; // Respawn in 5 seconds
-                player.velocityY = -10; // Higher bounce for jumping enemy
+                player.velocityY = -9; // Slightly higher bounce for jumping enemy
 
                 // Increment combo
                 player.combo = Math.min(player.combo + 1, player.maxCombo);
