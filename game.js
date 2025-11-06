@@ -2051,9 +2051,12 @@ class Platform {
         const brickWidth = CONFIG.BLOCK_SIZE;
         const brickHeight = CONFIG.BLOCK_SIZE / 2;
 
-        for (let bx = 0; bx < this.width; bx += brickWidth) {
-            for (let by = 0; by < this.height; by += brickHeight) {
-                const offset = (by / brickHeight) % 2 === 0 ? 0 : brickWidth / 2;
+        for (let by = 0; by < this.height; by += brickHeight) {
+            const offset = (by / brickHeight) % 2 === 0 ? 0 : brickWidth / 2;
+            for (let bx = 0; bx < this.width; bx += brickWidth) {
+                // Skip bricks that would extend beyond platform bounds
+                if (bx + offset + brickWidth > this.width) continue;
+
                 ctx.strokeRect(screenX + bx + offset, screenY + by, brickWidth, brickHeight);
 
                 // Highlight
@@ -2358,10 +2361,21 @@ window.addEventListener('keydown', (e) => {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
         e.preventDefault();
     }
+    // Prevent Command/Ctrl + Arrow shortcuts that cause stuck keys
+    if ((e.metaKey || e.ctrlKey) && ['ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+    }
 });
 
 window.addEventListener('keyup', (e) => {
     gameState.keys[e.key] = false;
+});
+
+// Clear all keys when window loses focus (prevents stuck keys)
+window.addEventListener('blur', () => {
+    Object.keys(gameState.keys).forEach(key => {
+        gameState.keys[key] = false;
+    });
 });
 
 // Touch Controls - Position-based tracking
