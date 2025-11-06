@@ -1002,7 +1002,7 @@ class Player {
                             this.y + this.height > remotePlayer.y;
 
             if (collision) {
-                // Check if we're jumping on them (stomp)
+                // Check if we're jumping on them (stomp) - ONLY way to deal damage
                 if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2) {
                     // We stomped them! They take damage
                     this.velocityY = -8; // Bounce
@@ -1030,13 +1030,44 @@ class Player {
                     sounds.stomp();
                     haptics.success();
                     multiplayer.updateLeaderboard();
+                } else {
+                    // Solid collision - no damage, just block each other
 
-                    // They need to handle being hit on their end
-                    // (their client will detect the collision too)
-                } else if (remotePlayer.y + CONFIG.PLAYER_SIZE > this.y &&
-                          remotePlayer.y + CONFIG.PLAYER_SIZE / 2 < this.y + this.height / 2) {
-                    // They hit us from above - we take damage
-                    this.hit(true);
+                    // Calculate overlap on each axis
+                    const overlapX = Math.min(
+                        this.x + this.width - remotePlayer.x,
+                        remotePlayer.x + CONFIG.PLAYER_SIZE - this.x
+                    );
+                    const overlapY = Math.min(
+                        this.y + this.height - remotePlayer.y,
+                        remotePlayer.y + CONFIG.PLAYER_SIZE - this.y
+                    );
+
+                    // Resolve collision on the axis with smallest overlap
+                    if (overlapX < overlapY) {
+                        // Horizontal collision - push apart horizontally
+                        if (this.x < remotePlayer.x) {
+                            // We're on the left, push left
+                            this.x -= overlapX;
+                        } else {
+                            // We're on the right, push right
+                            this.x += overlapX;
+                        }
+                        // Stop horizontal momentum when colliding
+                        this.velocityX *= 0.5;
+                    } else {
+                        // Vertical collision
+                        if (this.velocityY > 0 && this.y < remotePlayer.y) {
+                            // We're falling onto them from above - land on top
+                            this.y = remotePlayer.y - this.height;
+                            this.velocityY = 0;
+                            this.onGround = true;
+                        } else if (this.velocityY < 0 && this.y > remotePlayer.y) {
+                            // We're jumping up into them from below - bonk head
+                            this.y = remotePlayer.y + CONFIG.PLAYER_SIZE;
+                            this.velocityY = 0;
+                        }
+                    }
                 }
             }
         });
