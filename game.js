@@ -1568,14 +1568,9 @@ class Enemy {
                 // Find smallest overlap to determine collision side
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
-                // Check if standing on top of portal (allow walking off)
-                // Don't check onGround - it's reset to false at start of update() so it's always false here
-                // Just check if enemy Y position is close to portal top
-                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 10;
-
                 // Resolve collision on the side with smallest overlap
-                if (minOverlap === overlapTop && this.velocityY > 0) {
-                    // Landing on top
+                if (minOverlap === overlapTop && this.velocityY > 0 && this.y + this.height - this.velocityY < portal.y) {
+                    // Landing on top (only if was ABOVE portal before moving, not already on it)
                     this.y = portal.y - this.height;
                     this.velocityY = 0;
                     this.onGround = true;
@@ -1583,15 +1578,8 @@ class Enemy {
                     // Hitting from below
                     this.y = portal.y + portal.height;
                     this.velocityY = 0;
-                } else if (minOverlap === overlapLeft && !standingOnTop) {
-                    // Hitting from left side (but not if standing on top)
-                    this.x = portal.x - this.width;
-                    this.velocityX *= -1;
-                } else if (minOverlap === overlapRight && !standingOnTop) {
-                    // Hitting from right side (but not if standing on top)
-                    this.x = portal.x + portal.width;
-                    this.velocityX *= -1;
                 }
+                // No side collisions - portals are spawn points, enemies walk through them
             }
         });
 
@@ -1853,14 +1841,9 @@ class JumpingEnemy extends Enemy {
                 // Find smallest overlap to determine collision side
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
-                // Check if standing on top of portal (allow walking off)
-                // Don't check onGround - it's reset to false at start of update() so it's always false here
-                // Just check if enemy Y position is close to portal top
-                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 10;
-
                 // Resolve collision on the side with smallest overlap
-                if (minOverlap === overlapTop && this.velocityY > 0) {
-                    // Landing on top
+                if (minOverlap === overlapTop && this.velocityY > 0 && this.y + this.height - this.velocityY < portal.y) {
+                    // Landing on top (only if was ABOVE portal before moving, not already on it)
                     this.y = portal.y - this.height;
                     this.velocityY = 0;
                     this.onGround = true;
@@ -1868,15 +1851,8 @@ class JumpingEnemy extends Enemy {
                     // Hitting from below
                     this.y = portal.y + portal.height;
                     this.velocityY = 0;
-                } else if (minOverlap === overlapLeft && !standingOnTop) {
-                    // Hitting from left side (but not if standing on top)
-                    this.x = portal.x - this.width;
-                    this.velocityX *= -1;
-                } else if (minOverlap === overlapRight && !standingOnTop) {
-                    // Hitting from right side (but not if standing on top)
-                    this.x = portal.x + portal.width;
-                    this.velocityX *= -1;
                 }
+                // No side collisions - portals are spawn points, enemies walk through them
             }
         });
 
@@ -2223,14 +2199,9 @@ class TurtleEnemy extends Enemy {
                 // Find smallest overlap to determine collision side
                 const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
-                // Check if standing on top of portal (allow walking off)
-                // Don't check onGround - it's reset to false at start of update() so it's always false here
-                // Just check if enemy Y position is close to portal top
-                const standingOnTop = Math.abs((this.y + this.height) - portal.y) < 10;
-
                 // Resolve collision on the side with smallest overlap
-                if (minOverlap === overlapTop && this.velocityY > 0) {
-                    // Landing on top
+                if (minOverlap === overlapTop && this.velocityY > 0 && this.y + this.height - this.velocityY < portal.y) {
+                    // Landing on top (only if was ABOVE portal before moving, not already on it)
                     this.y = portal.y - this.height;
                     this.velocityY = 0;
                     this.onGround = true;
@@ -2238,15 +2209,8 @@ class TurtleEnemy extends Enemy {
                     // Hitting from below
                     this.y = portal.y + portal.height;
                     this.velocityY = 0;
-                } else if (minOverlap === overlapLeft && !standingOnTop) {
-                    // Hitting from left side (but not if standing on top)
-                    this.x = portal.x - this.width;
-                    this.velocityX *= -1;
-                } else if (minOverlap === overlapRight && !standingOnTop) {
-                    // Hitting from right side (but not if standing on top)
-                    this.x = portal.x + portal.width;
-                    this.velocityX *= -1;
                 }
+                // No side collisions - portals are spawn points, enemies walk through them
             }
         });
 
@@ -2938,7 +2902,7 @@ function initLevel() {
     // Add enemy spawn portals - 3 total for balanced gameplay
     // Distributed across the level for variety
     portals.push(new Portal(600, groundY - 60, 'normal'));      // Ground level - normal enemies
-    portals.push(new Portal(1200, groundY - 60, 'turtle'));     // Ground level - turtles
+    portals.push(new Portal(2100, groundY - 60, 'turtle'));     // Ground level - turtles (moved to clear area)
     portals.push(new Portal(1800, groundY - 300, 'jumping'));   // Mid-level platform - jumping enemies
 
     // Create coins throughout the level at various heights
