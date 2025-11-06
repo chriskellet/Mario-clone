@@ -1002,7 +1002,7 @@ class Player {
                             this.y + this.height > remotePlayer.y;
 
             if (collision) {
-                // Check if we're jumping on them (stomp)
+                // Check if we're jumping on them (stomp) - ONLY way to deal damage
                 if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2) {
                     // We stomped them! They take damage
                     this.velocityY = -8; // Bounce
@@ -1030,13 +1030,44 @@ class Player {
                     sounds.stomp();
                     haptics.success();
                     multiplayer.updateLeaderboard();
+                } else {
+                    // Solid collision - no damage, just block each other
 
-                    // They need to handle being hit on their end
-                    // (their client will detect the collision too)
-                } else if (remotePlayer.y + CONFIG.PLAYER_SIZE > this.y &&
-                          remotePlayer.y + CONFIG.PLAYER_SIZE / 2 < this.y + this.height / 2) {
-                    // They hit us from above - we take damage
-                    this.hit(true);
+                    // Calculate overlap on each axis
+                    const overlapX = Math.min(
+                        this.x + this.width - remotePlayer.x,
+                        remotePlayer.x + CONFIG.PLAYER_SIZE - this.x
+                    );
+                    const overlapY = Math.min(
+                        this.y + this.height - remotePlayer.y,
+                        remotePlayer.y + CONFIG.PLAYER_SIZE - this.y
+                    );
+
+                    // Resolve collision on the axis with smallest overlap
+                    if (overlapX < overlapY) {
+                        // Horizontal collision - push apart horizontally
+                        if (this.x < remotePlayer.x) {
+                            // We're on the left, push left
+                            this.x -= overlapX;
+                        } else {
+                            // We're on the right, push right
+                            this.x += overlapX;
+                        }
+                        // Stop horizontal momentum when colliding
+                        this.velocityX *= 0.5;
+                    } else {
+                        // Vertical collision
+                        if (this.velocityY > 0 && this.y < remotePlayer.y) {
+                            // We're falling onto them from above - land on top
+                            this.y = remotePlayer.y - this.height;
+                            this.velocityY = 0;
+                            this.onGround = true;
+                        } else if (this.velocityY < 0 && this.y > remotePlayer.y) {
+                            // We're jumping up into them from below - bonk head
+                            this.y = remotePlayer.y + CONFIG.PLAYER_SIZE;
+                            this.velocityY = 0;
+                        }
+                    }
                 }
             }
         });
@@ -1257,8 +1288,41 @@ class Enemy {
                 if (multiplayerState.connected) {
                     multiplayer.updateLeaderboard();
                 }
+            } else if (this.velocityY < 0 && this.y > player.y + player.height / 2) {
+                // Enemy hit player's feet from below while moving upward - kill enemy
+                this.alive = false;
+
+                // Increment combo
+                player.combo = Math.min(player.combo + 1, player.maxCombo);
+
+                // Apply multiplier to score
+                const baseScore = 100;
+                const multiplier = player.combo;
+                const scoreGained = baseScore * multiplier;
+                gameState.score += scoreGained;
+                document.getElementById('score').textContent = gameState.score;
+
+                // Show floating text with combo
+                const comboX = this.x + this.width / 2;
+                const comboY = this.y;
+
+                if (multiplier > 1) {
+                    const color = player.getComboColor(multiplier);
+                    createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                }
+                createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
+                sounds.stomp();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 12, '#8B4513');
+                screenShake(2, 8);
+                haptics.medium();
+
+                // Update leaderboard if in multiplayer
+                if (multiplayerState.connected) {
+                    multiplayer.updateLeaderboard();
+                }
             } else {
-                // Enemy hit player from side or below
+                // Enemy hit player from side - hurt player
                 player.hit();
             }
         }
@@ -1403,8 +1467,8 @@ class JumpingEnemy extends Enemy {
         if (this.onGround) {
             this.jumpCooldown--;
             if (this.jumpCooldown <= 0) {
-                // Jump!
-                this.velocityY = -10;
+                // Jump! (reduced height so players can't farm points by standing on platforms)
+                this.velocityY = -7;
                 this.jumpCooldown = this.jumpInterval;
                 createParticles(this.x + this.width / 2, this.y + this.height, 5, this.color);
             }
@@ -1416,7 +1480,7 @@ class JumpingEnemy extends Enemy {
                 // Player stomped enemy
                 this.alive = false;
                 this.respawnTime = Date.now() + 5000; // Respawn in 5 seconds
-                player.velocityY = -10; // Higher bounce for jumping enemy
+                player.velocityY = -9; // Slightly higher bounce for jumping enemy
 
                 // Increment combo
                 player.combo = Math.min(player.combo + 1, player.maxCombo);
@@ -1442,6 +1506,40 @@ class JumpingEnemy extends Enemy {
                 createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
                 screenShake(4, 12);
                 haptics.heavy();
+
+                // Sync to Firebase if connected
+                if (multiplayerState.connected) {
+                    multiplayer.updateLeaderboard();
+                }
+            } else if (this.velocityY < 0 && this.y > player.y + player.height / 2) {
+                // Enemy hit player's feet from below while moving upward - kill enemy
+                this.alive = false;
+                this.respawnTime = Date.now() + 5000; // Respawn in 5 seconds
+
+                // Increment combo
+                player.combo = Math.min(player.combo + 1, player.maxCombo);
+
+                // Apply multiplier to score (jumping enemies worth more)
+                const baseScore = 150;
+                const multiplier = player.combo;
+                const scoreGained = baseScore * multiplier;
+                gameState.score += scoreGained;
+                document.getElementById('score').textContent = gameState.score;
+
+                // Show floating text with combo
+                const comboX = this.x + this.width / 2;
+                const comboY = this.y;
+
+                if (multiplier > 1) {
+                    const color = player.getComboColor(multiplier);
+                    createFloatingText(comboX, comboY, `${multiplier}x COMBO!`, color, 24);
+                }
+                createFloatingText(comboX, comboY + 30, `+${scoreGained}`, '#FFD700', 20);
+
+                sounds.stomp();
+                createParticles(this.x + this.width / 2, this.y + this.height / 2, 15, this.color);
+                screenShake(3, 10);
+                haptics.medium();
 
                 // Sync to Firebase if connected
                 if (multiplayerState.connected) {
