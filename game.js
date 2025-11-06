@@ -727,6 +727,8 @@ class Player {
         this.hasUsedContinue = false;
         this.combo = 0; // Combo counter for consecutive kills
         this.maxCombo = 10; // Cap at 10x multiplier
+        this.deathX = 0; // Store death position for grave marker
+        this.deathY = 0;
     }
 
     update() {
@@ -996,6 +998,8 @@ class Player {
         if (gameState.lives <= 0) {
             if (multiplayerState.connected) {
                 // Continuous gameplay - out of lives mode
+                this.deathX = this.x;
+                this.deathY = this.y;
                 this.outOfLives = true;
                 showOutOfLivesScreen();
             } else {
@@ -1115,6 +1119,44 @@ class Player {
         if (combo >= 2) return '#FFFF00'; // Yellow for 2-3x
         return '#FFFFFF'; // White for 1x
     }
+}
+
+// Function to draw grave marker at death position
+function drawGraveMarker(x, y) {
+    const screenX = x - gameState.camera.x;
+    const screenY = y - gameState.camera.y;
+
+    ctx.save();
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(screenX + 20, screenY + 45, 15, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Grave base (stone)
+    ctx.fillStyle = '#666';
+    ctx.fillRect(screenX + 5, screenY + 20, 30, 25);
+
+    // Grave top (rounded)
+    ctx.beginPath();
+    ctx.arc(screenX + 20, screenY + 20, 15, Math.PI, 0, true);
+    ctx.fill();
+
+    // Cross on gravestone
+    ctx.fillStyle = '#888';
+    // Vertical bar
+    ctx.fillRect(screenX + 17, screenY + 25, 6, 12);
+    // Horizontal bar
+    ctx.fillRect(screenX + 13, screenY + 29, 14, 6);
+
+    // R.I.P. text
+    ctx.fillStyle = '#999';
+    ctx.font = 'bold 8px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('R.I.P.', screenX + 20, screenY + 15);
+
+    ctx.restore();
 }
 
 // Function to draw remote players
@@ -1285,8 +1327,8 @@ class Enemy {
             }
         }
 
-        // Check collision with player
-        if (this.alive && player.checkCollision(this)) {
+        // Check collision with player (skip if player is out of lives)
+        if (this.alive && !player.outOfLives && player.checkCollision(this)) {
             // Check if player is stomping enemy (coming from above)
             if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
                 // Player jumped on enemy
@@ -1508,8 +1550,8 @@ class JumpingEnemy extends Enemy {
             }
         }
 
-        // Check collision with player
-        if (this.alive && player.checkCollision(this)) {
+        // Check collision with player (skip if player is out of lives)
+        if (this.alive && !player.outOfLives && player.checkCollision(this)) {
             if (player.velocityY > 0 && player.y < this.y + this.height / 2) {
                 // Player stomped enemy
                 this.alive = false;
@@ -2128,6 +2170,11 @@ function gameLoop() {
     // Update and draw player
     player.update();
     player.draw();
+
+    // Draw grave marker if player is out of lives
+    if (player.outOfLives) {
+        drawGraveMarker(player.deathX, player.deathY);
+    }
 
     // Sync player position and health to Firebase (throttled)
     if (multiplayerState.connected) {
