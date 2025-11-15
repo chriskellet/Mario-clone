@@ -60,6 +60,8 @@ const multiplayerState = {
     leaderboardRef: null,
     enemiesRef: null,
     portalRef: null,
+    hitsRef: null, // For PvP hit messages
+    lastProcessedHit: null, // Track last hit to prevent duplicates
     isSpawnMaster: false, // True if this client controls enemy spawning
     // Track last synced values to avoid redundant updates
     lastSyncedState: {
@@ -101,6 +103,7 @@ class MultiplayerManager {
             multiplayerState.leaderboardRef = this.db.ref('leaderboard');
             multiplayerState.enemiesRef = this.db.ref('enemies');
             multiplayerState.portalRef = this.db.ref('portals');
+            multiplayerState.hitsRef = this.db.ref('hits');
 
             // Initialize player data
             await multiplayerState.playerRef.set({
@@ -128,6 +131,9 @@ class MultiplayerManager {
 
             // Listen for enemy state
             this.listenForEnemies();
+
+            // Listen for incoming PvP hits
+            this.listenForHits();
 
             // Update leaderboard
             this.updateLeaderboard();
@@ -357,6 +363,90 @@ class MultiplayerManager {
         });
     }
 
+    listenForHits() {
+        // Listen for incoming PvP hit claims directed at us
+        const myHitsRef = multiplayerState.hitsRef.child(multiplayerState.playerId);
+
+        myHitsRef.on('child_added', (snapshot) => {
+            const hitData = snapshot.val();
+            const hitId = snapshot.key;
+
+            // Prevent processing the same hit twice
+            if (multiplayerState.lastProcessedHit === hitId) return;
+            multiplayerState.lastProcessedHit = hitId;
+
+            // Validate hit data structure
+            if (!hitData || !hitData.attackerId || !hitData.timestamp) {
+                console.warn('Invalid hit data received:', hitData);
+                snapshot.ref.remove();
+                return;
+            }
+
+            // Check if hit claim is recent (within last 2 seconds)
+            const hitAge = Date.now() - hitData.timestamp;
+            if (hitAge > 2000 || hitAge < 0) {
+                console.warn('Hit claim is too old or in the future, ignoring');
+                snapshot.ref.remove();
+                return;
+            }
+
+            // Validate that the attacker exists
+            const attacker = multiplayerState.remotePlayers.get(hitData.attackerId);
+            if (!attacker) {
+                console.warn('Hit from unknown player:', hitData.attackerId);
+                snapshot.ref.remove();
+                return;
+            }
+
+            // CONSENSUS VALIDATION: Check if we agree with the attacker's claim
+            // 1. Position validation: Were we near the claimed position?
+            const ourActualX = player.x;
+            const ourActualY = player.y;
+            const claimedVictimX = hitData.victimX;
+            const claimedVictimY = hitData.victimY;
+
+            // Allow for some tolerance due to network lag (30 pixels)
+            const positionTolerance = 30;
+            const positionDiffX = Math.abs(ourActualX - claimedVictimX);
+            const positionDiffY = Math.abs(ourActualY - claimedVictimY);
+
+            if (positionDiffX > positionTolerance || positionDiffY > positionTolerance) {
+                console.warn(`Position mismatch - claimed: (${claimedVictimX}, ${claimedVictimY}), actual: (${ourActualX}, ${ourActualY})`);
+                snapshot.ref.remove();
+                return;
+            }
+
+            // 2. Geometry validation: Was attacker above us (valid stomp)?
+            const attackerY = hitData.attackerY;
+            if (attackerY >= ourActualY) {
+                console.warn('Invalid stomp geometry - attacker was not above victim');
+                snapshot.ref.remove();
+                return;
+            }
+
+            // 3. Check if we're already invulnerable (can't be hit)
+            if (player.invulnerable) {
+                console.log('Hit claim rejected - we are invulnerable');
+                snapshot.ref.remove();
+                return;
+            }
+
+            // 4. Check if we're already dead
+            if (player.outOfLives) {
+                console.log('Hit claim rejected - we are already dead');
+                snapshot.ref.remove();
+                return;
+            }
+
+            // CONSENSUS REACHED! Both parties agree on the hit
+            console.log(`✅ Consensus: Valid hit from ${hitData.attackerName}`);
+            player.hit(true); // Apply damage to ourselves
+
+            // Clean up the hit message
+            snapshot.ref.remove();
+        });
+    }
+
     // Interpolate remote player positions for smooth movement
     interpolateRemotePlayers() {
         multiplayerState.remotePlayers.forEach((playerData) => {
@@ -445,6 +535,26 @@ class MultiplayerManager {
             });
         } catch (error) {
             console.error('Failed to sync enemy:', error);
+        }
+    }
+
+    async sendHitClaim(victimId, attackerX, attackerY, victimX, victimY) {
+        if (!multiplayerState.connected) return;
+
+        try {
+            // Send hit claim to victim's hits inbox
+            const hitRef = multiplayerState.hitsRef.child(victimId).push();
+            await hitRef.set({
+                attackerId: multiplayerState.playerId,
+                attackerName: multiplayerState.playerName,
+                attackerX: Math.round(attackerX),
+                attackerY: Math.round(attackerY),
+                victimX: Math.round(victimX),
+                victimY: Math.round(victimY),
+                timestamp: Date.now(),
+            });
+        } catch (error) {
+            console.error('Failed to send hit claim:', error);
         }
     }
 
@@ -1318,9 +1428,10 @@ class Player {
                 // Check if remote player is stomping us from above
                 // They must be above our center, and we must not be jumping upward into them
                 if (remotePlayer.y < this.y + this.height / 2 && this.velocityY >= 0) {
-                    // They stomped us! We take damage (hit() will check invulnerability)
-                    this.hit(true);
-                    return; // Exit early after taking damage to avoid other collision checks
+                    // They stomped us!
+                    // NOTE: Damage now handled by consensus system via listenForHits()
+                    // The hit claim was already sent by the attacker and will be validated here
+                    return; // Exit early to avoid other collision checks
                 }
             }
 
@@ -1331,13 +1442,22 @@ class Player {
                 // Check if we're jumping on them (stomp) - ONLY way to deal damage
                 // Invulnerable players cannot hurt others (extra safety check)
                 if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2 && !this.invulnerable) {
-                    // We stomped them! They take damage on their client
-                    this.velocityY = -8; // Bounce
+                    // We stomped them! Send hit claim to victim for consensus validation
+                    this.velocityY = -8; // Bounce (immediate feedback)
+
+                    // Send hit claim to victim with position data for consensus
+                    multiplayer.sendHitClaim(
+                        playerId, // victim ID
+                        this.x,   // our position (attacker)
+                        this.y,
+                        remotePlayer.x, // their position (victim)
+                        remotePlayer.y
+                    );
 
                     // Increment combo
                     this.combo = Math.min(this.combo + 1, this.maxCombo);
 
-                    // Apply multiplier to score
+                    // Apply multiplier to score (optimistic - awarded immediately)
                     const baseScore = 200;
                     const multiplier = this.combo;
                     const scoreGained = baseScore * multiplier;
