@@ -197,15 +197,49 @@ class MultiplayerManager {
                 }
             }
 
-            // Determine spawn master (player with lowest ID alphabetically)
+            // Determine spawn master with AFK detection
+            // Normally: player with lowest ID alphabetically
+            // BUT: if that player is AFK (no updates for 15+ seconds), active players can claim the role
             const allPlayerIds = Array.from(playerIds).sort();
-            const spawnMasterId = allPlayerIds[0];
+            const nominalSpawnMasterId = allPlayerIds[0];
+            const nominalSpawnMaster = players[nominalSpawnMasterId];
+            const now = Date.now();
+            const spawnMasterInactivityThreshold = 15000; // 15 seconds
+
+            // Check if the nominal Spawn Master is inactive
+            const spawnMasterLastUpdate = nominalSpawnMaster?.timestamp || 0;
+            const spawnMasterInactive = (now - spawnMasterLastUpdate) > spawnMasterInactivityThreshold;
+
+            let actualSpawnMasterId;
+            if (spawnMasterInactive) {
+                // Nominal Spawn Master is AFK/abandoned - find the most recently active player to take over
+                // This ensures an active player becomes Spawn Master, not another AFK player
+                let mostRecentPlayerId = nominalSpawnMasterId;
+                let mostRecentTimestamp = 0;
+
+                for (const [id, data] of Object.entries(players)) {
+                    const timestamp = data.timestamp || 0;
+                    if (timestamp > mostRecentTimestamp) {
+                        mostRecentTimestamp = timestamp;
+                        mostRecentPlayerId = id;
+                    }
+                }
+                actualSpawnMasterId = mostRecentPlayerId;
+            } else {
+                // Nominal Spawn Master is active - use them
+                actualSpawnMasterId = nominalSpawnMasterId;
+            }
+
             const wasSpawnMaster = multiplayerState.isSpawnMaster;
-            multiplayerState.isSpawnMaster = (spawnMasterId === multiplayerState.playerId);
+            multiplayerState.isSpawnMaster = (actualSpawnMasterId === multiplayerState.playerId);
 
             // Log spawn master changes
             if (multiplayerState.isSpawnMaster && !wasSpawnMaster) {
-                console.log('🎮 You are now the spawn master - controlling enemy spawns and cleanup');
+                if (spawnMasterInactive && nominalSpawnMasterId !== multiplayerState.playerId) {
+                    console.log('🎮 Previous spawn master is AFK - you are now the spawn master (controlling enemy spawns and cleanup)');
+                } else {
+                    console.log('🎮 You are now the spawn master - controlling enemy spawns and cleanup');
+                }
             } else if (!multiplayerState.isSpawnMaster && wasSpawnMaster) {
                 console.log('🎮 Spawn master role transferred to another player');
             }
@@ -231,7 +265,7 @@ class MultiplayerManager {
         }
 
         multiplayerState.lastCleanupTime = now;
-        const inactivityThreshold = 60000; // 60 seconds of inactivity
+        const inactivityThreshold = 10000; // 10 seconds of inactivity (reduced from 60s to handle abandoned players faster)
 
         for (const [playerId, playerData] of Object.entries(players)) {
             // Skip our own player
@@ -240,7 +274,7 @@ class MultiplayerManager {
             const lastUpdate = playerData.timestamp || 0;
             const timeSinceUpdate = now - lastUpdate;
 
-            // If player hasn't updated in 60 seconds, remove them
+            // If player hasn't updated in 10 seconds, remove them
             if (timeSinceUpdate > inactivityThreshold) {
                 console.log(`🧹 Cleaning up inactive player: ${playerData.name} (inactive for ${Math.round(timeSinceUpdate / 1000)}s)`);
 
@@ -1257,12 +1291,23 @@ class Player {
     checkRemotePlayerCollisions() {
         if (!multiplayerState.connected) return;
 
+        const now = Date.now();
+        const afkThreshold = 10000; // 10 seconds - matches cleanup threshold
+
         multiplayerState.remotePlayers.forEach((remotePlayer, playerId) => {
             // Skip collision if remote player is dead or invulnerable
             if (remotePlayer.outOfLives || remotePlayer.invulnerable) return;
 
             // Skip collision if we are dead
             if (this.outOfLives) return;
+
+            // Skip collision with AFK players (no timestamp updates for 10+ seconds)
+            // This prevents farming abandoned players for points
+            const timeSinceUpdate = now - (remotePlayer.timestamp || 0);
+            if (timeSinceUpdate > afkThreshold) {
+                // Player is AFK - skip collision (they'll be cleaned up soon)
+                return;
+            }
 
             const collision = this.x < remotePlayer.x + CONFIG.PLAYER_SIZE &&
                             this.x + this.width > remotePlayer.x &&
@@ -1422,7 +1467,18 @@ function drawRemotePlayer(playerData) {
     const screenX = x - gameState.camera.x;
     const screenY = y - gameState.camera.y;
 
+    // Check if player is AFK (no updates for 10+ seconds)
+    const now = Date.now();
+    const timeSinceUpdate = now - (playerData.timestamp || 0);
+    const afkThreshold = 10000; // 10 seconds
+    const isAFK = timeSinceUpdate > afkThreshold;
+
     ctx.save();
+
+    // Make AFK players semi-transparent (ghosted)
+    if (isAFK) {
+        ctx.globalAlpha = 0.3;
+    }
 
     // Shadow
     ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
@@ -1481,12 +1537,22 @@ function drawRemotePlayer(playerData) {
     ctx.fillRect(screenX + width - 17, screenY + height - 8, 12, 8);
 
     // Player name label above character
+    ctx.globalAlpha = 1.0; // Reset alpha for text (always visible)
     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
     ctx.fillRect(screenX + width / 2 - 30, screenY - 15, 60, 12);
     ctx.fillStyle = 'white';
     ctx.font = 'bold 10px Arial';
     ctx.textAlign = 'center';
     ctx.fillText(name, screenX + width / 2, screenY - 7);
+
+    // AFK indicator
+    if (isAFK) {
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+        ctx.fillRect(screenX + width / 2 - 15, screenY - 30, 30, 12);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 9px Arial';
+        ctx.fillText('AFK', screenX + width / 2, screenY - 22);
+    }
 
     ctx.restore();
 }
