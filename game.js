@@ -60,6 +60,8 @@ const multiplayerState = {
     leaderboardRef: null,
     enemiesRef: null,
     portalRef: null,
+    hitsRef: null, // For PvP hit messages
+    lastProcessedHit: null, // Track last hit to prevent duplicates
     isSpawnMaster: false, // True if this client controls enemy spawning
     // Track last synced values to avoid redundant updates
     lastSyncedState: {
@@ -101,6 +103,7 @@ class MultiplayerManager {
             multiplayerState.leaderboardRef = this.db.ref('leaderboard');
             multiplayerState.enemiesRef = this.db.ref('enemies');
             multiplayerState.portalRef = this.db.ref('portals');
+            multiplayerState.hitsRef = this.db.ref('hits');
 
             // Initialize player data
             await multiplayerState.playerRef.set({
@@ -128,6 +131,9 @@ class MultiplayerManager {
 
             // Listen for enemy state
             this.listenForEnemies();
+
+            // Listen for incoming PvP hits
+            this.listenForHits();
 
             // Update leaderboard
             this.updateLeaderboard();
@@ -197,15 +203,49 @@ class MultiplayerManager {
                 }
             }
 
-            // Determine spawn master (player with lowest ID alphabetically)
+            // Determine spawn master with AFK detection
+            // Normally: player with lowest ID alphabetically
+            // BUT: if that player is AFK (no updates for 15+ seconds), active players can claim the role
             const allPlayerIds = Array.from(playerIds).sort();
-            const spawnMasterId = allPlayerIds[0];
+            const nominalSpawnMasterId = allPlayerIds[0];
+            const nominalSpawnMaster = players[nominalSpawnMasterId];
+            const now = Date.now();
+            const spawnMasterInactivityThreshold = 15000; // 15 seconds
+
+            // Check if the nominal Spawn Master is inactive
+            const spawnMasterLastUpdate = nominalSpawnMaster?.timestamp || 0;
+            const spawnMasterInactive = (now - spawnMasterLastUpdate) > spawnMasterInactivityThreshold;
+
+            let actualSpawnMasterId;
+            if (spawnMasterInactive) {
+                // Nominal Spawn Master is AFK/abandoned - find the most recently active player to take over
+                // This ensures an active player becomes Spawn Master, not another AFK player
+                let mostRecentPlayerId = nominalSpawnMasterId;
+                let mostRecentTimestamp = 0;
+
+                for (const [id, data] of Object.entries(players)) {
+                    const timestamp = data.timestamp || 0;
+                    if (timestamp > mostRecentTimestamp) {
+                        mostRecentTimestamp = timestamp;
+                        mostRecentPlayerId = id;
+                    }
+                }
+                actualSpawnMasterId = mostRecentPlayerId;
+            } else {
+                // Nominal Spawn Master is active - use them
+                actualSpawnMasterId = nominalSpawnMasterId;
+            }
+
             const wasSpawnMaster = multiplayerState.isSpawnMaster;
-            multiplayerState.isSpawnMaster = (spawnMasterId === multiplayerState.playerId);
+            multiplayerState.isSpawnMaster = (actualSpawnMasterId === multiplayerState.playerId);
 
             // Log spawn master changes
             if (multiplayerState.isSpawnMaster && !wasSpawnMaster) {
-                console.log('🎮 You are now the spawn master - controlling enemy spawns and cleanup');
+                if (spawnMasterInactive && nominalSpawnMasterId !== multiplayerState.playerId) {
+                    console.log('🎮 Previous spawn master is AFK - you are now the spawn master (controlling enemy spawns and cleanup)');
+                } else {
+                    console.log('🎮 You are now the spawn master - controlling enemy spawns and cleanup');
+                }
             } else if (!multiplayerState.isSpawnMaster && wasSpawnMaster) {
                 console.log('🎮 Spawn master role transferred to another player');
             }
@@ -231,7 +271,7 @@ class MultiplayerManager {
         }
 
         multiplayerState.lastCleanupTime = now;
-        const inactivityThreshold = 60000; // 60 seconds of inactivity
+        const inactivityThreshold = 10000; // 10 seconds of inactivity (reduced from 60s to handle abandoned players faster)
 
         for (const [playerId, playerData] of Object.entries(players)) {
             // Skip our own player
@@ -240,7 +280,7 @@ class MultiplayerManager {
             const lastUpdate = playerData.timestamp || 0;
             const timeSinceUpdate = now - lastUpdate;
 
-            // If player hasn't updated in 60 seconds, remove them
+            // If player hasn't updated in 10 seconds, remove them
             if (timeSinceUpdate > inactivityThreshold) {
                 console.log(`🧹 Cleaning up inactive player: ${playerData.name} (inactive for ${Math.round(timeSinceUpdate / 1000)}s)`);
 
@@ -320,6 +360,90 @@ class MultiplayerManager {
             if (index !== -1) {
                 enemies.splice(index, 1);
             }
+        });
+    }
+
+    listenForHits() {
+        // Listen for incoming PvP hit claims directed at us
+        const myHitsRef = multiplayerState.hitsRef.child(multiplayerState.playerId);
+
+        myHitsRef.on('child_added', (snapshot) => {
+            const hitData = snapshot.val();
+            const hitId = snapshot.key;
+
+            // Prevent processing the same hit twice
+            if (multiplayerState.lastProcessedHit === hitId) return;
+            multiplayerState.lastProcessedHit = hitId;
+
+            // Validate hit data structure
+            if (!hitData || !hitData.attackerId || !hitData.timestamp) {
+                console.warn('Invalid hit data received:', hitData);
+                snapshot.ref.remove();
+                return;
+            }
+
+            // Check if hit claim is recent (within last 2 seconds)
+            const hitAge = Date.now() - hitData.timestamp;
+            if (hitAge > 2000 || hitAge < 0) {
+                console.warn('Hit claim is too old or in the future, ignoring');
+                snapshot.ref.remove();
+                return;
+            }
+
+            // Validate that the attacker exists
+            const attacker = multiplayerState.remotePlayers.get(hitData.attackerId);
+            if (!attacker) {
+                console.warn('Hit from unknown player:', hitData.attackerId);
+                snapshot.ref.remove();
+                return;
+            }
+
+            // CONSENSUS VALIDATION: Check if we agree with the attacker's claim
+            // 1. Position validation: Were we near the claimed position?
+            const ourActualX = player.x;
+            const ourActualY = player.y;
+            const claimedVictimX = hitData.victimX;
+            const claimedVictimY = hitData.victimY;
+
+            // Allow for some tolerance due to network lag (30 pixels)
+            const positionTolerance = 30;
+            const positionDiffX = Math.abs(ourActualX - claimedVictimX);
+            const positionDiffY = Math.abs(ourActualY - claimedVictimY);
+
+            if (positionDiffX > positionTolerance || positionDiffY > positionTolerance) {
+                console.warn(`Position mismatch - claimed: (${claimedVictimX}, ${claimedVictimY}), actual: (${ourActualX}, ${ourActualY})`);
+                snapshot.ref.remove();
+                return;
+            }
+
+            // 2. Geometry validation: Was attacker above us (valid stomp)?
+            const attackerY = hitData.attackerY;
+            if (attackerY >= ourActualY) {
+                console.warn('Invalid stomp geometry - attacker was not above victim');
+                snapshot.ref.remove();
+                return;
+            }
+
+            // 3. Check if we're already invulnerable (can't be hit)
+            if (player.invulnerable) {
+                console.log('Hit claim rejected - we are invulnerable');
+                snapshot.ref.remove();
+                return;
+            }
+
+            // 4. Check if we're already dead
+            if (player.outOfLives) {
+                console.log('Hit claim rejected - we are already dead');
+                snapshot.ref.remove();
+                return;
+            }
+
+            // CONSENSUS REACHED! Both parties agree on the hit
+            console.log(`✅ Consensus: Valid hit from ${hitData.attackerName}`);
+            player.hit(true); // Apply damage to ourselves
+
+            // Clean up the hit message
+            snapshot.ref.remove();
         });
     }
 
@@ -411,6 +535,26 @@ class MultiplayerManager {
             });
         } catch (error) {
             console.error('Failed to sync enemy:', error);
+        }
+    }
+
+    async sendHitClaim(victimId, attackerX, attackerY, victimX, victimY) {
+        if (!multiplayerState.connected) return;
+
+        try {
+            // Send hit claim to victim's hits inbox
+            const hitRef = multiplayerState.hitsRef.child(victimId).push();
+            await hitRef.set({
+                attackerId: multiplayerState.playerId,
+                attackerName: multiplayerState.playerName,
+                attackerX: Math.round(attackerX),
+                attackerY: Math.round(attackerY),
+                victimX: Math.round(victimX),
+                victimY: Math.round(victimY),
+                timestamp: Date.now(),
+            });
+        } catch (error) {
+            console.error('Failed to send hit claim:', error);
         }
     }
 
@@ -1257,12 +1401,23 @@ class Player {
     checkRemotePlayerCollisions() {
         if (!multiplayerState.connected) return;
 
+        const now = Date.now();
+        const afkThreshold = 10000; // 10 seconds - matches cleanup threshold
+
         multiplayerState.remotePlayers.forEach((remotePlayer, playerId) => {
             // Skip collision if remote player is dead or invulnerable
             if (remotePlayer.outOfLives || remotePlayer.invulnerable) return;
 
             // Skip collision if we are dead
             if (this.outOfLives) return;
+
+            // Skip collision with AFK players (no timestamp updates for 10+ seconds)
+            // This prevents farming abandoned players for points
+            const timeSinceUpdate = now - (remotePlayer.timestamp || 0);
+            if (timeSinceUpdate > afkThreshold) {
+                // Player is AFK - skip collision (they'll be cleaned up soon)
+                return;
+            }
 
             const collision = this.x < remotePlayer.x + CONFIG.PLAYER_SIZE &&
                             this.x + this.width > remotePlayer.x &&
@@ -1273,9 +1428,10 @@ class Player {
                 // Check if remote player is stomping us from above
                 // They must be above our center, and we must not be jumping upward into them
                 if (remotePlayer.y < this.y + this.height / 2 && this.velocityY >= 0) {
-                    // They stomped us! We take damage (hit() will check invulnerability)
-                    this.hit(true);
-                    return; // Exit early after taking damage to avoid other collision checks
+                    // They stomped us!
+                    // NOTE: Damage now handled by consensus system via listenForHits()
+                    // The hit claim was already sent by the attacker and will be validated here
+                    return; // Exit early to avoid other collision checks
                 }
             }
 
@@ -1286,13 +1442,22 @@ class Player {
                 // Check if we're jumping on them (stomp) - ONLY way to deal damage
                 // Invulnerable players cannot hurt others (extra safety check)
                 if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2 && !this.invulnerable) {
-                    // We stomped them! They take damage on their client
-                    this.velocityY = -8; // Bounce
+                    // We stomped them! Send hit claim to victim for consensus validation
+                    this.velocityY = -8; // Bounce (immediate feedback)
+
+                    // Send hit claim to victim with position data for consensus
+                    multiplayer.sendHitClaim(
+                        playerId, // victim ID
+                        this.x,   // our position (attacker)
+                        this.y,
+                        remotePlayer.x, // their position (victim)
+                        remotePlayer.y
+                    );
 
                     // Increment combo
                     this.combo = Math.min(this.combo + 1, this.maxCombo);
 
-                    // Apply multiplier to score
+                    // Apply multiplier to score (optimistic - awarded immediately)
                     const baseScore = 200;
                     const multiplier = this.combo;
                     const scoreGained = baseScore * multiplier;
@@ -1422,7 +1587,18 @@ function drawRemotePlayer(playerData) {
     const screenX = x - gameState.camera.x;
     const screenY = y - gameState.camera.y;
 
+    // Check if player is AFK (no updates for 10+ seconds)
+    const now = Date.now();
+    const timeSinceUpdate = now - (playerData.timestamp || 0);
+    const afkThreshold = 10000; // 10 seconds
+    const isAFK = timeSinceUpdate > afkThreshold;
+
     ctx.save();
+
+    // Make AFK players semi-transparent (ghosted)
+    if (isAFK) {
+        ctx.globalAlpha = 0.3;
+    }
 
     // Shadow
     ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
@@ -1481,12 +1657,22 @@ function drawRemotePlayer(playerData) {
     ctx.fillRect(screenX + width - 17, screenY + height - 8, 12, 8);
 
     // Player name label above character
+    ctx.globalAlpha = 1.0; // Reset alpha for text (always visible)
     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
     ctx.fillRect(screenX + width / 2 - 30, screenY - 15, 60, 12);
     ctx.fillStyle = 'white';
     ctx.font = 'bold 10px Arial';
     ctx.textAlign = 'center';
     ctx.fillText(name, screenX + width / 2, screenY - 7);
+
+    // AFK indicator
+    if (isAFK) {
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+        ctx.fillRect(screenX + width / 2 - 15, screenY - 30, 30, 12);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 9px Arial';
+        ctx.fillText('AFK', screenX + width / 2, screenY - 22);
+    }
 
     ctx.restore();
 }
