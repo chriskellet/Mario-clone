@@ -25,11 +25,37 @@ body {
 
 #gameCanvas {
     display: block;
-    background: linear-gradient(180deg, #87CEEB 0%, #E0F6FF 70%);
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-    border-radius: 4px;
-    max-width: 100%;
-    max-height: 100%;
+    background: linear-gradient(180deg, #3E7CC4 0%, #CDEBFF 100%);
+    /* Sized in JS to fill the viewport exactly - no letterboxing. */
+}
+
+/* Shown in portrait, where the playable slice of the level is narrow */
+.rotate-hint {
+    position: fixed;
+    left: 50%;
+    bottom: 21%;
+    transform: translateX(-50%);
+    z-index: 60;
+    padding: 8px 16px;
+    border-radius: 20px;
+    background: rgba(12, 18, 38, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    backdrop-filter: blur(8px);
+    color: #fff;
+    font-size: 13px;
+    font-weight: bold;
+    white-space: nowrap;
+    pointer-events: none;
+    animation: hint-pulse 2.4s ease-in-out infinite;
+}
+
+.rotate-hint.hidden {
+    display: none;
+}
+
+@keyframes hint-pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 0.9; }
 }
 
 #touch-controls {
@@ -71,10 +97,11 @@ body {
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
-.control-btn:active {
-    transform: scale(0.95);
-    background: rgba(255, 255, 255, 0.3);
-    border-color: rgba(255, 255, 255, 0.6);
+.control-btn:active,
+.control-btn.pressed {
+    transform: scale(0.94);
+    background: rgba(255, 255, 255, 0.32);
+    border-color: rgba(255, 255, 255, 0.65);
 }
 
 .direction-btn svg {
@@ -91,30 +118,225 @@ body {
     height: 100px;
 }
 
-.action-btn:active {
-    background: rgba(255, 107, 107, 0.4);
-    border-color: rgba(255, 107, 107, 0.7);
+.action-btn:active,
+.action-btn.pressed {
+    background: rgba(255, 107, 107, 0.45);
+    border-color: rgba(255, 107, 107, 0.8);
+}
+
+.run-btn {
+    background: rgba(255, 200, 80, 0.22);
+    border: 3px solid rgba(255, 200, 80, 0.5);
+    width: 76px;
+    height: 76px;
+    align-self: flex-end;
+    font-size: 13px;
+}
+
+.run-btn:active,
+.run-btn.pressed {
+    background: rgba(255, 200, 80, 0.45);
+    border-color: rgba(255, 200, 80, 0.85);
+}
+
+.controls-right {
+    align-items: flex-end;
 }
 
 #game-ui {
     position: fixed;
-    top: 20px;
-    left: 20px;
-    right: 20px;
+    top: 16px;
+    left: 16px;
+    right: 16px;
     display: flex;
     justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
     z-index: 50;
-    font-size: 18px;
+    font-size: 17px;
     font-weight: bold;
     color: white;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
 }
 
-.score, .coins, .lives {
-    background: rgba(0, 0, 0, 0.5);
-    padding: 10px 20px;
-    border-radius: 20px;
-    backdrop-filter: blur(5px);
+.hud-group {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.hud-item {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    background: rgba(12, 18, 38, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    padding: 7px 14px;
+    border-radius: 12px;
+    backdrop-filter: blur(8px);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.hud-item.hidden {
+    display: none;
+}
+
+.hud-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: 0.65;
+    font-weight: 700;
+}
+
+.hud-icon {
+    font-size: 15px;
+    line-height: 1;
+}
+
+.coins .hud-icon { color: #FFD700; }
+.lives .hud-icon { color: #FF6B6B; }
+
+.combo {
+    background: rgba(255, 180, 0, 0.28);
+    border-color: rgba(255, 215, 0, 0.6);
+    color: #FFE79A;
+    animation: combo-pop 0.4s ease-out;
+}
+
+@keyframes combo-pop {
+    from { transform: scale(1.35); }
+    to { transform: scale(1); }
+}
+
+.time.urgent {
+    background: rgba(200, 30, 30, 0.6);
+    border-color: rgba(255, 120, 120, 0.7);
+    animation: time-flash 1s steps(2, end) infinite;
+}
+
+@keyframes time-flash {
+    50% { opacity: 0.55; }
+}
+
+.icon-btn {
+    pointer-events: auto;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(12, 18, 38, 0.55);
+    backdrop-filter: blur(8px);
+    color: white;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.icon-btn:active {
+    transform: scale(0.92);
+    background: rgba(60, 90, 150, 0.6);
+}
+
+/* Centre-screen announcement (level start, level clear, hurry up) */
+.banner {
+    position: fixed;
+    top: 32%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 90;
+    text-align: center;
+    color: white;
+    pointer-events: none;
+    animation: banner-in 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+.banner.hidden {
+    display: none;
+}
+
+.banner-title {
+    font-size: 44px;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    text-shadow: 0 4px 0 rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.5);
+    background: linear-gradient(180deg, #FFF6C2 0%, #FFC93D 60%, #F08000 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.banner-subtitle {
+    margin-top: 6px;
+    font-size: 18px;
+    font-weight: bold;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+@keyframes banner-in {
+    from { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
+    to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+
+/* Start-screen key hints */
+.controls-help {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px 16px;
+    margin-top: 24px;
+    max-width: 420px;
+    font-size: 13px;
+    opacity: 0.8;
+}
+
+.controls-help b {
+    color: #FFD700;
+}
+
+/* Game-over result readout */
+.result-grid {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 30px;
+}
+
+.result-grid > div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 92px;
+    padding: 14px 10px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    font-size: 26px;
+    font-weight: bold;
+}
+
+.result-label {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: 0.65;
+}
+
+/* The HUD and touch pad belong to the game, not to the menus on top of it */
+body.menu-open #game-ui,
+body.menu-open #touch-controls,
+body.menu-open #leaderboard,
+body.menu-open .banner,
+body.menu-open .rotate-hint {
+    display: none;
 }
 
 .screen {
@@ -123,13 +345,23 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.8);
+    background:
+        radial-gradient(ellipse at 50% 12%, rgba(94, 160, 226, 0.45), transparent 62%),
+        linear-gradient(180deg, rgba(9, 16, 34, 0.94) 0%, rgba(5, 9, 20, 0.97) 100%);
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
+    padding: 24px;
+    overflow-y: auto;
     z-index: 200;
     color: white;
+    animation: screen-in 0.25s ease-out;
+}
+
+@keyframes screen-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .screen.hidden {
@@ -137,13 +369,22 @@ body {
 }
 
 .screen h1 {
-    font-size: 48px;
-    margin-bottom: 20px;
-    text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.8);
-    background: linear-gradient(135deg, #ff6b6b, #ffd93d, #6bcf7f);
+    font-size: 56px;
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+    background: linear-gradient(180deg, #FFF3B0 0%, #FFC93D 45%, #F26D3D 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    filter: drop-shadow(0 4px 0 rgba(0, 0, 0, 0.35)) drop-shadow(0 12px 28px rgba(255, 150, 40, 0.28));
+}
+
+.tagline {
+    font-size: 16px !important;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    margin-bottom: 26px !important;
 }
 
 .screen p {
@@ -153,21 +394,33 @@ body {
 }
 
 .menu-btn {
-    padding: 15px 40px;
+    padding: 15px 44px;
+    margin: 6px 0;
     font-size: 20px;
     border: none;
     border-radius: 30px;
-    background: linear-gradient(135deg, #6bcf7f 0%, #4ecdc4 100%);
+    background: linear-gradient(180deg, #6BD98A 0%, #35B7A6 100%);
     color: white;
     font-weight: bold;
+    letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
-    transition: all 0.2s ease;
+    box-shadow: 0 6px 0 rgba(0, 0, 0, 0.28), 0 12px 26px rgba(0, 0, 0, 0.35);
+    transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+}
+
+.menu-btn:hover {
+    filter: brightness(1.06);
 }
 
 .menu-btn:active {
-    transform: translateY(2px);
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+    transform: translateY(4px);
+    box-shadow: 0 2px 0 rgba(0, 0, 0, 0.28), 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+
+.menu-btn:disabled {
+    filter: grayscale(0.8);
+    box-shadow: 0 6px 0 rgba(0, 0, 0, 0.2);
+    cursor: not-allowed;
 }
 
 @media (min-width: 768px) {
@@ -203,10 +456,94 @@ body {
 
     #game-ui {
         font-size: 14px;
+        top: 10px;
+        left: 10px;
+        right: 10px;
     }
 
-    .score, .coins, .lives {
-        padding: 8px 15px;
+    .hud-item {
+        padding: 5px 10px;
+        gap: 5px;
+        border-radius: 10px;
+    }
+
+    .hud-label {
+        font-size: 9px;
+    }
+
+    .icon-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 13px;
+    }
+
+    .banner-title {
+        font-size: 32px;
+    }
+
+    .banner-subtitle {
+        font-size: 15px;
+    }
+
+    .result-grid > div {
+        min-width: 74px;
+        font-size: 20px;
+        padding: 10px 8px;
+    }
+
+    .controls-help {
+        font-size: 11px;
+        gap: 6px 12px;
+        margin-top: 16px;
+    }
+
+    .run-btn {
+        width: 66px;
+        height: 66px;
+        font-size: 11px;
+    }
+}
+
+/* On short landscape screens the HUD and pad must not swallow the game */
+@media (max-height: 480px) {
+    #game-ui {
+        top: 8px;
+        font-size: 13px;
+    }
+
+    .hud-item {
+        padding: 4px 9px;
+    }
+
+    .banner {
+        top: 26%;
+    }
+
+    #touch-controls {
+        padding: 10px 14px;
+    }
+
+    .control-btn {
+        width: 62px;
+        height: 62px;
+        opacity: 0.75;
+    }
+
+    .action-btn {
+        width: 68px;
+        height: 68px;
+        font-size: 12px;
+    }
+
+    .run-btn {
+        width: 56px;
+        height: 56px;
+        font-size: 10px;
+    }
+
+    .controls-left,
+    .controls-right {
+        gap: 10px;
     }
 }
 
@@ -394,6 +731,10 @@ body {
 }
 
 /* All-Time Leaderboard */
+.all-time-leaderboard.hidden {
+    display: none;
+}
+
 .all-time-leaderboard {
     background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(10px);

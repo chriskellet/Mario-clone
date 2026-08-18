@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mario Clone - Tests</title>
+    <link rel="manifest" href="manifest.json">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -178,6 +179,23 @@
             assert(CONFIG.JUMP_POWER >= -15, 'Jump power too large');
         });
 
+        configTests.test('Running is faster than walking', () => {
+            assert(CONFIG.RUN_SPEED > CONFIG.MOVE_SPEED, 'RUN_SPEED should exceed MOVE_SPEED');
+        });
+
+        configTests.test('Game-feel windows are set', () => {
+            assert(CONFIG.COYOTE_TIME > 0, 'CONFIG missing coyote time');
+            assert(CONFIG.JUMP_BUFFER > 0, 'CONFIG missing jump buffer');
+            assert(CONFIG.JUMP_CUT > 0 && CONFIG.JUMP_CUT < 1, 'JUMP_CUT should be a fraction');
+        });
+
+        configTests.test('Nothing can fall faster than a sub-step', () => {
+            // Sub-stepped movement is what stops entities tunnelling through
+            // thin platforms, so terminal velocity must stay within reach of it.
+            assert(CONFIG.MAX_FALL_SPEED > 0, 'MAX_FALL_SPEED must be positive');
+            assert(CONFIG.MAX_FALL_SPEED < 100, 'MAX_FALL_SPEED implausibly large');
+        });
+
         // Test Suite 4: Functions
         const functionTests = new TestRunner('Functions');
 
@@ -219,7 +237,196 @@
             assert(typeof haptics.heavy === 'function', 'heavy haptic not found');
         });
 
-        // Test Suite 7: PWA
+        // Test Suite 7: Geometry helpers
+        const mathTests = new TestRunner('Geometry Helpers');
+
+        mathTests.test('clamp keeps values in range', () => {
+            assertEqual(clamp(5, 0, 10), 5);
+            assertEqual(clamp(-5, 0, 10), 0);
+            assertEqual(clamp(15, 0, 10), 10);
+        });
+
+        mathTests.test('lerp interpolates', () => {
+            assertEqual(lerp(0, 10, 0), 0);
+            assertEqual(lerp(0, 10, 1), 10);
+            assertEqual(lerp(0, 10, 0.5), 5);
+        });
+
+        mathTests.test('overlaps detects intersection', () => {
+            const a = { x: 0, y: 0, width: 10, height: 10 };
+            assert(overlaps(a, { x: 5, y: 5, width: 10, height: 10 }), 'should overlap');
+            assert(!overlaps(a, { x: 20, y: 0, width: 10, height: 10 }), 'should not overlap');
+        });
+
+        mathTests.test('touching edges do not count as overlapping', () => {
+            // Standing flush against a wall must not read as being inside it.
+            const a = { x: 0, y: 0, width: 10, height: 10 };
+            assert(!overlaps(a, { x: 10, y: 0, width: 10, height: 10 }), 'flush edges overlap');
+        });
+
+        // Test Suite 8: Collision resolver
+        const collisionTests = new TestRunner('Collision Resolver');
+
+        const makeSolid = (x, y, w, h, oneWay = false) => ({ x, y, width: w, height: h, oneWay });
+        const makeBody = (x, y, vx, vy) => ({
+            x, y, width: 20, height: 20, velocityX: vx, velocityY: vy, onGround: false,
+        });
+
+        collisionTests.test('landing stops a falling body on top of a solid', () => {
+            const floor = makeSolid(0, 100, 200, 20);
+            const body = makeBody(50, 60, 0, 30);
+            moveAndCollide(body, { solids: [floor] });
+            assertEqual(body.y + body.height, 100, 'body should rest on the floor');
+            assertEqual(body.velocityY, 0, 'vertical speed should be cancelled');
+            assert(body.onGround, 'body should report standing');
+        });
+
+        collisionTests.test('terminal velocity does not tunnel through a thin platform', () => {
+            // Falling far faster than the platform is thick: the sub-stepped
+            // resolver has to catch it rather than skip past it.
+            const thin = makeSolid(0, 300, 200, 8);
+            const body = makeBody(50, 0, 0, 0);
+            for (let i = 0; i < 60 && !body.onGround; i++) {
+                body.velocityY = CONFIG.MAX_FALL_SPEED * 4;
+                moveAndCollide(body, { solids: [thin] });
+            }
+            assert(body.onGround, 'body never landed');
+            assertEqual(body.y + body.height, 300, 'body fell straight through');
+        });
+
+        collisionTests.test('walls stop horizontal movement', () => {
+            const wall = makeSolid(100, 0, 20, 200);
+            const body = makeBody(50, 50, 0, 0);
+            let hit;
+            for (let i = 0; i < 20; i++) {
+                body.velocityX = 6;
+                hit = moveAndCollide(body, { solids: [wall] });
+            }
+            assertEqual(hit.hitWall, 1, 'should report a right-hand wall hit');
+            assertEqual(body.x + body.width, 100, 'body should stop at the wall');
+        });
+
+        collisionTests.test('ceilings are reported so blocks can be bumped', () => {
+            const ceiling = makeSolid(0, 0, 200, 20);
+            const body = makeBody(50, 40, 0, -30);
+            const hit = moveAndCollide(body, { solids: [ceiling] });
+            assert(hit.ceiling === ceiling, 'ceiling not reported');
+            assertEqual(body.y, 20, 'body should be pushed below the ceiling');
+        });
+
+        collisionTests.test('one-way platforms catch a fall but not a rise', () => {
+            const cloud = makeSolid(0, 100, 200, 10, true);
+
+            const rising = makeBody(50, 150, 0, 0);
+            for (let i = 0; i < 10; i++) {
+                rising.velocityY = -12;
+                moveAndCollide(rising, { solids: [cloud] });
+            }
+            assert(rising.y + rising.height < 100, 'rising body should pass through');
+
+            const falling = makeBody(50, 40, 0, 0);
+            for (let i = 0; i < 20 && !falling.onGround; i++) {
+                falling.velocityY = 12;
+                moveAndCollide(falling, { solids: [cloud] });
+            }
+            assertEqual(falling.y + falling.height, 100, 'falling body should land on it');
+        });
+
+        // Test Suite 9: Level construction
+        const levelTests = new TestRunner('Level Construction');
+
+        levelTests.test('initLevel builds a populated level', () => {
+            initLevel();
+            assert(platforms.length > 10, 'not enough platforms');
+            assert(blocks.length > 0, 'no blocks');
+            assert(coins.length > 0, 'no coins');
+            assert(portals.length > 0, 'no enemy pipes');
+            assert(enemies.length > 0, 'no enemies in single player');
+            assert(flagpole, 'no flagpole in single player');
+        });
+
+        levelTests.test('the level is deterministic so multiplayer stays in sync', () => {
+            initLevel();
+            const first = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
+            initLevel();
+            const second = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
+            assertEqual(first, second, 'coin layout differs between builds');
+        });
+
+        levelTests.test('coin indices are unique', () => {
+            initLevel();
+            const seen = new Set(coins.map(c => c.index));
+            assertEqual(seen.size, coins.length, 'duplicate coin indices would break Firebase claims');
+        });
+
+        levelTests.test('the ground has gaps to fall into', () => {
+            initLevel();
+            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+            assert(ground.length > 1, 'ground should be split into segments');
+            const hasGap = ground.some((seg, i) => i > 0 && seg.x > ground[i - 1].x + ground[i - 1].width);
+            assert(hasGap, 'no pits found in the level');
+        });
+
+        levelTests.test('respawn points are never over a pit', () => {
+            initLevel();
+            for (let i = 0; i < 40; i++) {
+                const spot = player.getRandomRespawnLocation();
+                const supported = platforms.some(p =>
+                    spot.x + player.width > p.x && spot.x < p.x + p.width && p.y >= spot.y);
+                assert(supported, `respawn at ${Math.round(spot.x)} has nothing below it`);
+            }
+        });
+
+        // Test Suite 10: Blocks and power-ups
+        const blockTests = new TestRunner('Blocks and Power-ups');
+
+        blockTests.test('a question block gives up one item per hit', () => {
+            initLevel();
+            const block = new Block(0, 0, 'question', 'coin', 2);
+            const big = { health: 2 };
+            block.onBump(big);
+            assertEqual(block.count, 1, 'first hit should spend one item');
+            block.bump = 0; block.bumpVelocity = 0;   // let the animation finish
+            block.onBump(big);
+            assertEqual(block.count, 0, 'second hit should empty it');
+            assert(block.used, 'an empty block should look spent');
+        });
+
+        blockTests.test('an empty block cannot be milked', () => {
+            const block = new Block(0, 0, 'question', 'coin', 1);
+            const big = { health: 2 };
+            block.onBump(big);
+            block.bump = 0; block.bumpVelocity = 0;
+            const before = gameState.score;
+            block.onBump(big);
+            assertEqual(gameState.score, before, 'a spent block still paid out');
+        });
+
+        blockTests.test('a mid-bounce block ignores repeat hits', () => {
+            const block = new Block(0, 0, 'question', 'coin', 3);
+            const big = { health: 2 };
+            block.onBump(big);
+            block.onBump(big);            // same jump, no animation reset
+            assertEqual(block.count, 2, 'one jump should count as one hit');
+        });
+
+        blockTests.test('only a big player smashes bricks', () => {
+            const brick = new Block(0, 0, 'brick', null);
+            brick.onBump({ health: 1 });
+            assert(!brick.destroyed, 'small player should not smash a brick');
+            brick.bump = 0; brick.bumpVelocity = 0;
+            brick.onBump({ health: 2 });
+            assert(brick.destroyed, 'big player should smash a brick');
+        });
+
+        blockTests.test('mushroom blocks sprout a power-up', () => {
+            initLevel();
+            const before = powerUps.length;
+            new Block(100, 100, 'question', 'mushroom', 1).onBump({ health: 1 });
+            assert(powerUps.length === before + 1, 'no power-up appeared');
+        });
+
+        // Test Suite 11: PWA
         const pwaTests = new TestRunner('PWA Support');
 
         pwaTests.test('Manifest link exists', () => {
@@ -240,6 +447,10 @@
                 functionTests,
                 audioTests,
                 hapticTests,
+                mathTests,
+                collisionTests,
+                levelTests,
+                blockTests,
                 pwaTests
             ];
 
@@ -323,6 +534,9 @@
         <div><span id="score"></span></div>
         <div><span id="coins"></span></div>
         <div><span id="lives"></span></div>
+        <div><span id="level"></span></div>
+        <div class="time"><span id="time"></span></div>
+        <div><span id="combo"></span></div>
     </div>
     <script src="game.js"></script>
 </body>
