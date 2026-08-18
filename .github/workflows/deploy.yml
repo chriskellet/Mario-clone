@@ -5,7 +5,13 @@ on:
     branches:
       - main
       - master
-      - 'claude/**'
+      # The repository's current default branch. GitHub Pages only accepts
+      # deployments from the default branch, so the previous 'claude/**'
+      # wildcard queued a run on every feature branch that was rejected by the
+      # github-pages environment before a runner was even assigned - a red X on
+      # every push that never built anything. Rename the default branch to
+      # `main` and this line can go.
+      - claude/mario-clone-touch-game-011CUqLq96M8PWbcMhjpPjrZ
   workflow_dispatch:
 
 permissions:
