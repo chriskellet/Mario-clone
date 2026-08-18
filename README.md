@@ -1,58 +1,106 @@
 # Mario Clone - Touch Edition
 
-A modern, web-based Mario clone with touch controls, optimized for iPhone and mobile devices.
+A web-based platformer with a hand-tuned physics engine, touch controls, and an
+optional live multiplayer arena. Built with vanilla JavaScript and HTML5 Canvas,
+optimised for iPhone and other mobile devices.
 
-## Features
-
-- **Modern Graphics**: Smooth, colorful visuals with a contemporary art style
-- **Touch Controls**: Intuitive on-screen buttons for mobile gameplay
-- **Sound Effects**: Dynamic audio feedback for jumps, coin collection, and enemy stomps
-- **Responsive Design**: Adapts to any screen size, optimized for iPhone
-- **Physics Engine**: Realistic jumping, gravity, and collision detection
-- **Progressive Difficulty**: Collect all coins to advance to the next level
-
-## How to Play
+## Playing
 
 ### Desktop
-- **Arrow Keys**: Move left/right
-- **Up Arrow or Space**: Jump
 
-### Mobile/iPhone
-- **Left/Right Buttons**: Move Mario
-- **Jump Button**: Make Mario jump
+| Key | Action |
+| --- | --- |
+| `←` `→` (or `A` `D`) | Move |
+| `Space` / `↑` / `W` | Jump — hold for a higher jump |
+| `Shift` (or `X`) | Run |
+| `P` / `Esc` | Pause |
+| `M` | Mute |
+
+### Mobile
+
+On-screen **←**, **→**, **RUN** and **JUMP** buttons. Multi-touch is supported,
+so you can run and jump at the same time, and sliding a finger between buttons
+works the way you would expect.
 
 ### Objective
-- Collect all coins to complete the level
-- Jump on enemies to defeat them
-- Avoid getting hit by enemies
-- Don't fall off platforms!
 
-## Game Mechanics
+Reach the flagpole at the end of the level. Grabbing it higher up is worth more,
+and whatever is left on the clock is converted into a time bonus.
 
-- **Jumping on Enemies**: Land on top of enemies to defeat them and earn 100 points
-- **Coin Collection**: Each coin is worth 50 points
-- **Lives System**: Start with 3 lives, lose one when hit by an enemy
-- **Invulnerability**: After getting hit, you're temporarily invulnerable
+## Game mechanics
+
+- **Jumping** — variable height: tapping gives a short hop, holding gives a full
+  jump, and running gives more of both. Coyote time (6 frames) lets you jump
+  just after stepping off a ledge, and jump buffering (8 frames) means a press
+  made slightly before you land still fires.
+- **Enemies** — stomp them from above. Consecutive stomps in one airborne
+  sequence build a multiplier up to 10x; landing ends the chain.
+- **Turtles** — one stomp tucks them into a shell, a second kick sends the shell
+  sliding, and a sliding shell mows down everything in its path. Stomp a moving
+  shell to stop it dead.
+- **Blocks** — head-butt `?` blocks for coins and power-ups. Big Mario smashes
+  brick blocks; small Mario just bumps them. Bumping a block flips any enemy
+  standing on top of it.
+- **Power-ups** — a mushroom makes you big (one free hit and the ability to
+  smash bricks); a star makes you briefly invincible and lethal on contact.
+- **Coins** — 50 points each, and every 100 coins is an extra life.
+- **Pits and the clock** — falling into a gap or running the timer out costs a
+  life regardless of size.
+- **Levels** — clearing the flagpole awards a life and moves you to the next
+  world, with faster enemies and reinforcements each time.
+
+## Multiplayer
+
+When Firebase is reachable, players share a level, see each other move, compete
+on a live leaderboard, and can stomp each other. Pipes spawn enemies under a
+single elected spawn master so everyone sees the same world. If Firebase is
+blocked or offline the game falls back to single player automatically.
+
+## Engine notes
+
+- **Fixed timestep.** The simulation runs at exactly 60Hz through an accumulator
+  regardless of display refresh rate, so the game plays identically on a 60Hz
+  laptop and a 120Hz phone. Rendering still happens once per animation frame.
+- **Swept AABB collision.** One resolver handles the player and every enemy.
+  Movement is applied in sub-steps of at most 8px so nothing tunnels through a
+  platform at terminal velocity, and each axis resolves separately so floors,
+  ceilings and walls all behave. Cloud platforms are one-way: you jump up
+  through them and land on top.
+- **Device-pixel-ratio rendering.** The canvas backing store is scaled by DPR
+  and the viewport adapts to the screen's shape, so the game fills the display
+  without letterboxing and stays sharp on retina panels.
+- **Deterministic levels.** Layout is data-driven and free of `Math.random`, so
+  every player in a multiplayer session sees the same platforms and coins.
 
 ## Development
 
-This game is built with:
+Serve the directory over HTTP and open `index.html`:
+
+```sh
+python3 -m http.server 8000
+```
+
+Open `tests.html` in a browser to run the test suite — geometry helpers, the
+collision resolver, level construction, and block/power-up behaviour, alongside
+DOM and configuration checks.
+
+Built with:
+
 - HTML5 Canvas for rendering
 - Vanilla JavaScript for game logic
-- Web Audio API for sound effects
-- CSS3 for modern UI styling
+- Web Audio API for sound effects and the chiptune loop
+- Firebase Realtime Database for multiplayer
+- CSS3 for the UI
 
 ## Deployment
 
-The game is automatically deployed to GitHub Pages via GitHub Actions whenever changes are pushed to the main branch.
+The game is automatically deployed to GitHub Pages via GitHub Actions whenever
+changes are pushed to the main branch.
 
-## Browser Compatibility
+## Browser compatibility
 
-Works on all modern browsers including:
-- Safari (iOS)
-- Chrome (Android/iOS)
-- Firefox
-- Edge
+Works on all modern browsers including Safari (iOS), Chrome (Android/iOS),
+Firefox and Edge.
 
 ## License
 

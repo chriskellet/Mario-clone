@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mario-clone-v2';  // Increment version to force cache update
+const CACHE_NAME = 'mario-clone-v3';  // Increment version to force cache update
 const urlsToCache = [
   '/Mario-clone/',
   '/Mario-clone/index.html',
@@ -22,13 +22,13 @@ self.addEventListener('fetch', event => {
   event.respondWith(
     fetch(event.request)
       .then(response => {
-        // Clone the response before caching
-        const responseToCache = response.clone();
-
-        caches.open(CACHE_NAME)
-          .then(cache => {
-            cache.put(event.request, responseToCache);
-          });
+        // Only GET responses are cacheable; cache.put throws on anything else.
+        if (event.request.method === 'GET' && response && response.ok) {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME)
+            .then(cache => cache.put(event.request, responseToCache))
+            .catch(() => {});
+        }
 
         return response;
       })

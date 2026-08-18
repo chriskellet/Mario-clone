@@ -10,15 +10,18 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Mario Clone">
     <meta name="theme-color" content="#E52521">
-    <link rel="manifest" href="manifest.json?v=2">
+    <link rel="manifest" href="manifest.json?v=3">
     <title>Mario Clone - Touch Edition</title>
-    <link rel="stylesheet" href="styles.css?v=2">
+    <link rel="stylesheet" href="styles.css?v=3">
     <script>
         // Force service worker update on page load
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(registrations => {
-                registrations.forEach(registration => registration.update());
-            });
+                registrations.forEach(registration => {
+                    // An update can reject while one is already in flight.
+                    Promise.resolve(registration.update()).catch(() => {});
+                });
+            }).catch(() => {});
         }
     </script>
 </head>
@@ -27,52 +30,85 @@
         <canvas id="gameCanvas"></canvas>
         <div id="touch-controls">
             <div class="controls-left">
-                <button id="btn-left" class="control-btn direction-btn">
+                <button id="btn-left" class="control-btn direction-btn" aria-label="Move left">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
                     </svg>
                 </button>
-                <button id="btn-right" class="control-btn direction-btn">
+                <button id="btn-right" class="control-btn direction-btn" aria-label="Move right">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
                     </svg>
                 </button>
             </div>
             <div class="controls-right">
-                <button id="btn-jump" class="control-btn action-btn">
+                <button id="btn-run" class="control-btn run-btn" aria-label="Run">
+                    <span>RUN</span>
+                </button>
+                <button id="btn-jump" class="control-btn action-btn" aria-label="Jump">
                     <span>JUMP</span>
                 </button>
             </div>
         </div>
         <div id="game-ui">
-            <div class="score">Score: <span id="score">0</span></div>
-            <div class="coins">Coins: <span id="coins">0</span></div>
-            <div class="lives">Lives: <span id="lives">3</span></div>
+            <div class="hud-group">
+                <div class="hud-item score"><span class="hud-label">Score</span><span id="score">0</span></div>
+                <div class="hud-item coins"><span class="hud-icon">●</span><span id="coins">0</span></div>
+                <div class="hud-item lives"><span class="hud-icon">♥</span><span id="lives">3</span></div>
+            </div>
+            <div class="hud-group">
+                <div class="hud-item combo hidden"><span id="combo">1x</span></div>
+                <div class="hud-item level"><span class="hud-label">World</span><span id="level">1</span></div>
+                <div class="hud-item time"><span class="hud-label">Time</span><span id="time">300</span></div>
+                <button id="btn-pause" class="icon-btn" aria-label="Pause">❚❚</button>
+                <button id="btn-mute" class="icon-btn" aria-label="Mute">🔊</button>
+            </div>
         </div>
+        <div id="banner" class="banner hidden">
+            <div class="banner-title"></div>
+            <div class="banner-subtitle"></div>
+        </div>
+        <div id="rotate-hint" class="rotate-hint hidden">↻ Rotate for a wider view</div>
         <div id="leaderboard" class="leaderboard hidden">
             <h3>Top Players</h3>
             <div id="leaderboard-list"></div>
         </div>
         <div id="start-screen" class="screen">
             <h1>Mario Clone</h1>
-            <p>Multiplayer Edition</p>
-            <div id="all-time-leaderboard" class="all-time-leaderboard">
+            <p class="tagline">Multiplayer Edition</p>
+            <div id="all-time-leaderboard" class="all-time-leaderboard hidden">
                 <h3>🏆 All-Time Best</h3>
                 <div id="all-time-list"></div>
             </div>
             <input type="text" id="player-name" class="name-input" placeholder="Enter your name..." maxlength="15" autocomplete="off">
             <button id="start-btn" class="menu-btn">Start Game</button>
+            <div class="controls-help">
+                <span><b>← →</b> move</span>
+                <span><b>Space / ↑</b> jump</span>
+                <span><b>Shift</b> run</span>
+                <span><b>P</b> pause</span>
+                <span><b>M</b> mute</span>
+            </div>
         </div>
         <div id="game-over-screen" class="screen hidden">
             <h1>Game Over</h1>
-            <p>Final Score: <span id="final-score">0</span></p>
+            <div class="result-grid">
+                <div><span class="result-label">Score</span><span id="final-score">0</span></div>
+                <div><span class="result-label">Coins</span><span id="final-coins">0</span></div>
+                <div><span class="result-label">World</span><span id="final-level">1</span></div>
+            </div>
             <button id="restart-btn" class="menu-btn">Play Again</button>
+        </div>
+        <div id="pause-screen" class="screen hidden">
+            <h1>Paused</h1>
+            <button id="resume-btn" class="menu-btn">Resume</button>
+            <button id="quit-btn" class="menu-btn secondary-btn">Quit to Menu</button>
         </div>
         <div id="out-of-lives-screen" class="screen hidden">
             <h1>Out of Lives!</h1>
             <p>You can rejoin in <span id="respawn-countdown">10</span> seconds</p>
-            <p class="continue-hint" id="continue-hint">Or use your one-time continue?</p>
-            <button id="continue-btn" class="menu-btn continue-btn">Continue (<span id="continue-countdown">5</span>s)</button>
+            <p class="continue-hint" id="continue-hint">Or use your one-time continue (<span id="continue-countdown">5</span>s)</p>
+            <button id="continue-btn" class="menu-btn continue-btn">Continue</button>
             <button id="restart-from-zero-btn" class="menu-btn secondary-btn">Restart (Score → 0)</button>
         </div>
     </div>
@@ -80,7 +116,8 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script>
-        // Firebase configuration
+        // Firebase configuration. Wrapped in a guard so the game still runs
+        // (in single player) when the SDK is blocked or offline.
         const firebaseConfig = {
             apiKey: "AIzaSyDPGKgsAlCN4t9aJvrN5oD6qWFohV-RGps",
             authDomain: "marioish.firebaseapp.com",
@@ -91,15 +128,23 @@
             appId: "1:508377537303:web:829c07cfa7f40eec76b552"
         };
         // Initialize Firebase
-        firebase.initializeApp(firebaseConfig);
-        const database = firebase.database();
+        if (typeof firebase !== 'undefined') {
+            try {
+                firebase.initializeApp(firebaseConfig);
+                window.database = firebase.database();
+            } catch (err) {
+                console.warn('Firebase unavailable, running in single player:', err);
+            }
+        } else {
+            console.warn('Firebase SDK did not load - running in single player.');
+        }
     </script>
-    <script src="game.js?v=2"></script>
+    <script src="game.js?v=3"></script>
     <script>
         // Register service worker for PWA support with auto-update
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/Mario-clone/sw.js?v=2')
+                navigator.serviceWorker.register('sw.js?v=3')
                     .then(reg => {
                         console.log('Service Worker registered');
 
