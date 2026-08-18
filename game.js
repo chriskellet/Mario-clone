@@ -18,6 +18,13 @@ const CONFIG = {
     STOMP_BOUNCE: -8,         // Bounce after stomping an enemy
     STOMP_BOUNCE_HELD: -12,   // Higher bounce when the jump button is held
 
+    // --- Dying ---
+    DEATH_FREEZE: 26,         // Frames held still so the hit registers
+    DEATH_POP: -13,           // Upward kick before the body falls away
+    DEATH_FALL: 90,           // Frames of falling before the world resets
+    RESPAWN_READY: 50,        // Frames of "Ready?" before control returns
+    DEATH_PIT_TAIL: 30,       // Shorter beat when you already fell out of sight
+
     // --- Running ---
     MOVE_SPEED: 4.6,
     RUN_SPEED: 7.2,
@@ -33,6 +40,9 @@ const CONFIG = {
     CAMERA_LOOKAHEAD: 90,
     CAMERA_GROUND_BIAS: 40,   // Keeps the ground clear of the touch buttons
 
+    // --- Collision courtesies ---
+    CORNER_CORRECTION: 10,    // Slide past a block corner clipped by this much
+
     // --- Entities ---
     PLAYER_SIZE: 40,
     SMALL_PLAYER_HEIGHT: 30,   // Small Mario really is shorter, hitbox included
@@ -41,6 +51,8 @@ const CONFIG = {
     BLOCK_SIZE: 40,
     POWERUP_SIZE: 30,
     POWERUP_SPEED: 2,
+    PORTAL_WIDTH: 60,
+    PORTAL_HEIGHT: 60,
     JUMPER_JUMP_POWER: -9,
     STAR_DURATION: 600,        // 10 seconds of invincibility
     ENEMY_RESPAWN_MS: 6000,
@@ -1327,25 +1339,33 @@ function moveAndCollide(entity, options = {}) {
     const result = { hitWall: 0, ceiling: null, ground: null };
     entity.onGround = false;
 
+    const nudge = options.cornerCorrection || 0;
+
     for (let step = 0; step < steps; step++) {
         // --- Horizontal ---
         if (stepX !== 0) {
             entity.x += stepX;
+
+            // Resolve against the deepest overlap rather than whichever solid
+            // happens to come first in the list. Stopping at the first hit can
+            // leave the entity still inside a second one when several are
+            // touching, which is how bodies end up embedded in a staircase.
+            let push = 0;
             for (const solid of solids) {
                 if (solid.oneWay && !ignoreOneWay) continue;
                 if (!overlaps(entity, solid)) continue;
 
-                if (stepX > 0) {
-                    entity.x = solid.x - entity.width;
-                    result.hitWall = 1;
-                } else {
-                    entity.x = solid.x + solid.width;
-                    result.hitWall = -1;
-                }
+                const correction = stepX > 0
+                    ? (solid.x - entity.width) - entity.x
+                    : (solid.x + solid.width) - entity.x;
+                if (Math.abs(correction) > Math.abs(push)) push = correction;
+            }
+            if (push !== 0) {
+                entity.x += push;
+                result.hitWall = stepX > 0 ? 1 : -1;
                 // Stop advancing into the wall for the rest of this frame,
                 // otherwise later sub-steps re-collide with the same solid.
                 stepX = 0;
-                break;
             }
         }
 
@@ -1353,26 +1373,45 @@ function moveAndCollide(entity, options = {}) {
         if (stepY !== 0) {
             const previousBottom = entity.y + entity.height;
             entity.y += stepY;
+
+            let push = 0;
+            let landedOn = null;
+            let bumpedInto = null;
             for (const solid of solids) {
                 if (!overlaps(entity, solid)) continue;
 
+                let correction;
                 if (stepY > 0) {
                     // One-way platforms only catch you if you were already above them.
                     if (solid.oneWay && !ignoreOneWay && previousBottom > solid.y + 1) continue;
-                    entity.y = solid.y - entity.height;
-                    entity.velocityY = 0;
-                    entity.onGround = true;
-                    result.ground = solid;
+                    correction = (solid.y - entity.height) - entity.y;
+                    if (Math.abs(correction) > Math.abs(push)) { push = correction; landedOn = solid; }
                 } else {
                     if (solid.oneWay && !ignoreOneWay) continue;
-                    entity.y = solid.y + solid.height;
-                    entity.velocityY = 0;
-                    result.ceiling = solid;
+                    correction = (solid.y + solid.height) - entity.y;
+                    if (Math.abs(correction) > Math.abs(push)) { push = correction; bumpedInto = solid; }
+                }
+            }
+
+            // Clipping the corner of a block on the way up used to kill the
+            // jump outright. If only a sliver is caught, slide past it instead
+            // - the jump was clearly meant to go through the gap.
+            if (bumpedInto && nudge > 0 && slideAroundCorner(entity, bumpedInto, solids, nudge, ignoreOneWay)) {
+                continue;
+            }
+
+            if (push !== 0) {
+                entity.y += push;
+                entity.velocityY = 0;
+                if (landedOn) {
+                    entity.onGround = true;
+                    result.ground = landedOn;
+                } else if (bumpedInto) {
+                    result.ceiling = bumpedInto;
                 }
                 // The remaining sub-steps would drive straight back into it and
                 // a block would report two head-butts from a single jump.
                 stepY = 0;
-                break;
             }
         }
 
@@ -1380,6 +1419,29 @@ function moveAndCollide(entity, options = {}) {
     }
 
     return result;
+}
+
+/**
+ * Corner correction. When a rising entity catches only a few pixels of a
+ * block's edge, shift it sideways past the obstruction and let the jump
+ * continue. Returns true when the entity was moved clear.
+ */
+function slideAroundCorner(entity, ceiling, solids, maxNudge, ignoreOneWay) {
+    const overshootLeft = (entity.x + entity.width) - ceiling.x;   // caught by its left edge
+    const overshootRight = (ceiling.x + ceiling.width) - entity.x; // caught by its right edge
+
+    let shift = 0;
+    if (overshootLeft > 0 && overshootLeft <= maxNudge) shift = -overshootLeft - 0.5;
+    else if (overshootRight > 0 && overshootRight <= maxNudge) shift = overshootRight + 0.5;
+    if (shift === 0) return false;
+
+    // Only worth doing if the new position is genuinely clear.
+    const moved = { x: entity.x + shift, y: entity.y, width: entity.width, height: entity.height };
+    const stillStuck = solids.some(s => (!s.oneWay || ignoreOneWay) && overlaps(moved, s));
+    if (stillStuck) return false;
+
+    entity.x += shift;
+    return true;
 }
 
 // Is there something to stand on just past the entity's leading edge?
@@ -1435,6 +1497,10 @@ class Player {
         this.squash = 1;          // 1 = neutral, <1 squashed, >1 stretched
         this.starTimer = 0;       // Frames of star invincibility remaining
         this.controlLock = 0;     // Frames where input is ignored (cutscenes)
+        this.dying = false;       // Playing the death animation
+        this.deathTimer = 0;
+        this.deathSpin = 0;
+        this.safeGround = null;   // Last solid footing, used as a checkpoint
     }
 
     get starPower() {
@@ -1473,12 +1539,19 @@ class Player {
 
     // True while the player cannot be hurt for any reason.
     get immune() {
-        return this.invulnerable || this.starPower || this.outOfLives;
+        return this.invulnerable || this.starPower || this.outOfLives || this.dying;
     }
 
     update() {
         // Don't update if out of lives (paused for decision)
         if (this.outOfLives) return;
+
+        // A death plays out over a second and a half; nothing else the player
+        // does matters until it finishes.
+        if (this.dying) {
+            this.updateDeath();
+            return;
+        }
 
         if (this.invulnerable && Date.now() >= this.invulnerableUntil) {
             this.setInvulnerable(false);
@@ -1503,13 +1576,16 @@ class Player {
 
         this.wasOnGround = this.onGround;
 
-        const hit = moveAndCollide(this);
+        const hit = moveAndCollide(this, { cornerCorrection: CONFIG.CORNER_CORRECTION });
 
         if (hit.hitWall !== 0 && Math.sign(this.velocityX) === hit.hitWall) {
             this.velocityX = 0;
         }
         if (hit.ceiling) {
             this.bumpCeiling(hit.ceiling);
+        }
+        if (hit.ground) {
+            this.recordSafeGround(hit.ground);
         }
 
         // Keep player in world bounds
@@ -1680,20 +1756,12 @@ class Player {
     }
 
     fallToDeath() {
-        // A pit ignores the size/health system - it always costs a life.
-        if (this.outOfLives) return;
+        // A pit ignores the size/health system - it always costs a life. The
+        // body is already off-screen, so skip straight past the falling beat.
+        if (this.outOfLives || this.dying) return;
         this.health = 1;
-        this.setInvulnerable(false);
-        this.starTimer = 0;
-        this.hit();
-        // Bring the player back above the world if they survived.
-        if (!this.outOfLives && this.y > CONFIG.WORLD_HEIGHT) {
-            const spawn = this.getRandomRespawnLocation();
-            this.x = spawn.x;
-            this.y = spawn.y;
-            this.velocityX = 0;
-            this.velocityY = 0;
-        }
+        this.startDeath();
+        this.deathTimer = CONFIG.DEATH_FREEZE + CONFIG.DEATH_FALL - CONFIG.DEATH_PIT_TAIL;
     }
 
     checkCollision(obj) {
@@ -1737,11 +1805,27 @@ class Player {
         }
     }
 
+    /** Remembers the last patch of solid ground stood on, as a checkpoint. */
+    recordSafeGround(surface) {
+        if (!surface || surface.variant !== 'ground') return;
+        // Stay clear of the very edge, so the checkpoint is never a ledge you
+        // immediately walk off.
+        const margin = 24;
+        if (this.x < surface.x + margin || this.x + this.width > surface.x + surface.width - margin) return;
+        this.safeGround = { x: this.x, y: surface.y - this.height };
+    }
+
     getRandomRespawnLocation() {
-        // Prefer a platform with clear headroom that is not over a pit.
-        const groundY = CONFIG.WORLD_HEIGHT - 50;
+        // In the multiplayer arena, dropping back in anywhere keeps things
+        // moving. In single player that felt random and disorienting, so
+        // respawn where the player last had their feet on solid ground.
+        if (!multiplayerState.connected) {
+            if (this.safeGround) return { ...this.safeGround };
+            return { x: 80, y: GROUND_Y - this.height };
+        }
+
         const candidates = platforms.filter(p =>
-            p.variant !== 'ground' && p.y < groundY - 80 && p.y > 140 && p.width >= 80);
+            p.variant !== 'ground' && p.y < GROUND_Y - 80 && p.y > 140 && p.width >= 80);
 
         if (candidates.length > 0) {
             const platform = candidates[Math.floor(Math.random() * candidates.length)];
@@ -1789,42 +1873,97 @@ class Player {
         }
 
         // Small Mario dies
+        this.startDeath();
+    }
+
+    /**
+     * Death is a beat, not an instant teleport. The old code moved the player
+     * to the respawn point on the same frame the hit landed, which read as a
+     * glitch: you never saw what killed you. Now everything stops, the body
+     * pops up and falls off the screen, and only then does the world reset.
+     */
+    startDeath() {
+        if (this.dying || this.outOfLives) return;
+
+        this.dying = true;
+        this.deathTimer = 0;
+        this.velocityX = 0;
+        this.velocityY = 0;
+        this.setInvulnerable(false);
+        this.starTimer = 0;
+        this.combo = 0;
+
         gameState.lives--;
         updateHUD();
         sounds.die();
         haptics.error();
+        music.stop();
         createParticles(this.x + this.width / 2, this.y + this.height / 2, 16, this.colorPalette.shirt);
+    }
 
-        // Check if out of lives
+    updateDeath() {
+        this.deathTimer++;
+
+        // Beat one: hang motionless so the hit registers.
+        if (this.deathTimer === CONFIG.DEATH_FREEZE) {
+            this.velocityY = CONFIG.DEATH_POP;
+        }
+
+        // Beat two: arc up and fall away, passing through the whole level.
+        if (this.deathTimer > CONFIG.DEATH_FREEZE) {
+            this.velocityY = Math.min(this.velocityY + CONFIG.GRAVITY, CONFIG.MAX_FALL_SPEED);
+            this.y += this.velocityY;
+            this.deathSpin += 0.16;
+        }
+
+        const gone = this.y - gameState.camera.y > view.h + 80;
+        if (this.deathTimer >= CONFIG.DEATH_FREEZE + CONFIG.DEATH_FALL || gone) {
+            this.finishDeath();
+        }
+    }
+
+    finishDeath() {
+        this.dying = false;
+        this.deathTimer = 0;
+        this.deathSpin = 0;
+
         if (gameState.lives <= 0) {
             if (multiplayerState.connected) {
                 // Continuous gameplay - out of lives mode
                 this.deathX = this.x;
-                this.deathY = this.y;
+                this.deathY = Math.min(this.y, CONFIG.WORLD_HEIGHT - 100);
+                this.y = this.deathY;
                 this.outOfLives = true;
                 multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable, this.outOfLives);
                 showOutOfLivesScreen();
             } else {
-                // Single player - game over
                 gameOver();
             }
-        } else {
-            const spawnPos = this.getRandomRespawnLocation();
-            this.x = spawnPos.x;
-            this.y = spawnPos.y;
-            this.velocityX = 0;
-            this.velocityY = 0;
-            this.health = 2; // Respawn as big Mario
-            this.isJumping = false;
-
-            // Apply death penalty (20% score reduction) in multiplayer
-            if (multiplayerState.connected) {
-                multiplayer.respawnPlayer();
-            }
-
-            this.setInvulnerable(true, 2000);
-            updateCamera(true);
+            return;
         }
+
+        // Grow back first: the size setter shifts y to keep the feet planted,
+        // so applying it after positioning would leave the player hovering.
+        this.health = 2;              // Respawn as big Mario
+        const spawnPos = this.getRandomRespawnLocation();
+        this.x = spawnPos.x;
+        this.y = spawnPos.y;
+        this.velocityX = 0;
+        this.velocityY = 0;
+        this.isJumping = false;
+        this.jumpBuffer = 0;
+
+        // Apply death penalty (20% score reduction) in multiplayer
+        if (multiplayerState.connected) {
+            multiplayer.respawnPlayer();
+        }
+
+        // A moment to re-orient before control comes back.
+        this.controlLock = CONFIG.RESPAWN_READY;
+        this.setInvulnerable(true, 2500);
+        updateCamera(true);
+        showBanner(`${gameState.lives} ${gameState.lives === 1 ? 'life' : 'lives'} left`, 'Ready?', 1200);
+        music.start();
     }
 
     // Check collision with remote players for PvP
@@ -1930,6 +2069,22 @@ class Player {
     draw() {
         const screenX = this.x - gameState.camera.x;
         const screenY = this.y - gameState.camera.y;
+
+        // The dying body tumbles, so it reads as "that went wrong" at a glance.
+        if (this.dying) {
+            ctx.save();
+            ctx.translate(screenX + this.width / 2, screenY + this.height / 2);
+            ctx.rotate(this.deathSpin);
+            ctx.translate(-this.width / 2, -this.height / 2);
+            drawMarioSprite(ctx, {
+                x: 0, y: 0, width: this.width, height: this.height,
+                big: false, direction: this.direction, palette: this.colorPalette,
+                alpha: 1, squash: 1, onGround: false, velocityY: this.velocityY,
+                walkPhase: 0, moving: false, skidding: false,
+            });
+            ctx.restore();
+            return;
+        }
 
         let alpha = 1;
         if (this.invulnerable && Math.floor(Date.now() / 80) % 2 === 0) alpha = 0.45;
@@ -3320,8 +3475,8 @@ class Portal {
     constructor(x, y, enemyType = 'normal') {
         this.x = x;
         this.y = y;
-        this.width = 52;
-        this.height = 60;
+        this.width = CONFIG.PORTAL_WIDTH;
+        this.height = CONFIG.PORTAL_HEIGHT;
         this.enemyType = enemyType; // 'normal', 'jumping', or 'turtle'
         this.spawnCooldown = 180 + Math.random() * 180; // 3-6 seconds startup delay
         this.animation = 0;
@@ -3793,52 +3948,77 @@ const GROUND_Y = CONFIG.WORLD_HEIGHT - 50;
 // Deep enough that the dirt still fills the bottom of a tall portrait screen.
 const GROUND_DEPTH = 420;
 
+// ---------------------------------------------------------------------------
+//  The level is laid out on a 40px grid - one cell is exactly the player's
+//  width and a big player's height. Building on the grid is what keeps every
+//  gap either genuinely passable or honestly solid: a hand-placed level ends
+//  up with 20 and 30px slots that look like openings but are too tight to
+//  walk into. Tiers are spaced GRID * 3 apart, comfortably inside the ~158px
+//  a standing jump clears, so every layer is reachable from the one below.
+// ---------------------------------------------------------------------------
+const GRID = 40;
+const TIER = {
+    ground: GROUND_Y,                 // 550
+    low: GROUND_Y - GRID * 3,         // 430
+    mid: GROUND_Y - GRID * 6,         // 310
+    high: GROUND_Y - GRID * 9,        // 190
+};
+const PLATFORM_THICKNESS = 20;
+const CLOUD_THICKNESS = 14;
+// Blocks hang one body-height clear of the ground: you walk under them and
+// can still head-butt them from below.
+const BLOCK_ROW_Y = GROUND_Y - GRID * 4;   // 390, so the row spans 390-430
+
 // Solid stretches of ground; the gaps between them are the pits.
 const GROUND_SEGMENTS = [
-    { x: 0, width: 880 },
-    { x: 1000, width: 700 },
-    { x: 1820, width: 780 },
-    { x: 2700, width: 900 },
+    { x: 0, width: 840 },
+    { x: 960, width: 720 },
+    { x: 1800, width: 760 },
+    { x: 2680, width: 920 },
 ];
 
+// [x, width] per tier. Nothing overlaps and every span is a multiple of GRID.
 const PLATFORM_LAYOUT = [
     // Lower tier - one jump from the ground
-    [250, 110, 180], [560, 120, 160], [1080, 110, 170], [1420, 120, 160],
-    [1900, 110, 180], [2250, 120, 160], [2800, 110, 200],
-    // Middle tier
-    [400, 250, 150], [760, 260, 150], [1200, 250, 160], [1600, 260, 150],
-    [2050, 250, 160], [2450, 260, 150], [2920, 250, 170],
+    ['low', 240, 200], ['low', 560, 160], ['low', 1040, 200], ['low', 1400, 160],
+    ['low', 1880, 200], ['low', 2240, 160], ['low', 2760, 200],
+    // Middle tier - staggered so it never sits directly on the tier below
+    ['mid', 400, 160], ['mid', 800, 160], ['mid', 1280, 160], ['mid', 1640, 160],
+    ['mid', 2120, 160], ['mid', 2480, 160], ['mid', 2960, 160],
 ];
 
 // One-way cloud platforms you can jump up through
 const CLOUD_LAYOUT = [
-    [300, 370, 130], [900, 385, 140], [1500, 375, 130],
-    [2150, 385, 140], [2700, 375, 130],
+    [280, 160], [880, 160], [1520, 160], [2160, 160], [2720, 160],
 ];
 
-// [x, contents, count] laid out in rows of blocks at head height
+// Rows of blocks at head height, in bands clear of the platforms above them
 const BLOCK_ROWS = [
-    { y: 130, items: [['brick', null], ['question', 'coin']], x: 460 },
-    { y: 130, items: [['brick', null], ['question', 'mushroom'], ['brick', null]], x: 760 },
-    { y: 130, items: [['question', 'coin'], ['brick', null], ['question', 'coin']], x: 1280 },
-    { y: 130, items: [['brick', null], ['question', 'star']], x: 1830 },
-    { y: 130, items: [['brick', null], ['question', 'coin', 3], ['brick', null]], x: 2100 },
-    { y: 260, items: [['brick', null], ['question', 'coin'], ['brick', null]], x: 2440 },
-    { y: 130, items: [['question', 'mushroom'], ['brick', null]], x: 2710 },
+    { x: 120, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
+    { x: 760, items: [['question', 'mushroom']] },
+    { x: 1280, items: [['brick', null], ['question', 'coin', 3], ['brick', null]] },
+    { x: 1560, items: [['question', 'star'], ['brick', null]] },
+    { x: 2400, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
+    { x: 2680, items: [['question', 'mushroom'], ['brick', null]] },
 ];
 
+// [type, x, tier the enemy starts on]
 const ENEMY_LAYOUT = [
-    ['normal', 500, 110], ['normal', 640, 0], ['normal', 1150, 110],
-    ['normal', 1500, 120], ['normal', 2150, 0], ['normal', 2330, 120],
-    ['normal', 2900, 110],
-    ['jumping', 1300, 0], ['jumping', 2480, 260],
-    ['turtle', 840, 0], ['turtle', 1980, 110], ['turtle', 3040, 0],
+    ['normal', 480, 'ground'], ['normal', 620, 'low'], ['normal', 1120, 'low'],
+    ['normal', 1460, 'ground'], ['normal', 2000, 'low'], ['normal', 2300, 'low'],
+    ['normal', 2840, 'ground'],
+    ['jumping', 1240, 'ground'], ['jumping', 2520, 'mid'],
+    ['turtle', 700, 'ground'], ['turtle', 1920, 'low'], ['turtle', 3000, 'ground'],
 ];
 
-// [type, x, height above ground of the pipe's base]
+// [type, x, tier the pipe stands on]
 const PORTAL_LAYOUT = [
-    ['normal', 1030, 0], ['turtle', 2740, 0], ['jumping', 1450, 140],
+    ['normal', 460, 'ground'], ['jumping', 1920, 'low'], ['turtle', 2160, 'ground'],
 ];
+
+const STAIRCASE_X = 3200;
+const STAIRCASE_STEPS = 4;
+const FLAGPOLE_X = 3440;
 
 function buildGround() {
     for (const segment of GROUND_SEGMENTS) {
@@ -3849,7 +4029,7 @@ function buildGround() {
 function buildStaircase(startX, steps) {
     for (let i = 0; i < steps; i++) {
         for (let j = 0; j <= i; j++) {
-            blocks.push(new Block(startX + i * CONFIG.BLOCK_SIZE, GROUND_Y - (j + 1) * CONFIG.BLOCK_SIZE, 'solid'));
+            blocks.push(new Block(startX + i * GRID, GROUND_Y - (j + 1) * GRID, 'solid'));
         }
     }
 }
@@ -3899,45 +4079,38 @@ function initLevel() {
 
     buildGround();
 
-    for (const [x, height, width] of PLATFORM_LAYOUT) {
-        platforms.push(new Platform(x, GROUND_Y - height - 20, width, 20, 'brick'));
+    for (const [tier, x, width] of PLATFORM_LAYOUT) {
+        platforms.push(new Platform(x, TIER[tier], width, PLATFORM_THICKNESS, 'brick'));
     }
-    for (const [x, height, width] of CLOUD_LAYOUT) {
-        platforms.push(new Platform(x, GROUND_Y - height - 14, width, 14, 'cloud'));
+    for (const [x, width] of CLOUD_LAYOUT) {
+        platforms.push(new Platform(x, TIER.high, width, CLOUD_THICKNESS, 'cloud'));
     }
 
     for (const row of BLOCK_ROWS) {
         row.items.forEach(([type, contents, count], i) => {
-            blocks.push(new Block(
-                row.x + i * CONFIG.BLOCK_SIZE,
-                GROUND_Y - row.y - CONFIG.BLOCK_SIZE,
-                type,
-                contents,
-                count || 1
-            ));
+            blocks.push(new Block(row.x + i * GRID, BLOCK_ROW_Y, type, contents, count || 1));
         });
     }
 
     // Staircase up to the goal, like the run-in at the end of a Mario level
-    buildStaircase(3180, 4);
+    buildStaircase(STAIRCASE_X, STAIRCASE_STEPS);
 
-    for (const [type, x, height] of PORTAL_LAYOUT) {
-        portals.push(new Portal(x, GROUND_Y - height - 60, type));
+    for (const [type, x, tier] of PORTAL_LAYOUT) {
+        portals.push(new Portal(x, TIER[tier] - CONFIG.PORTAL_HEIGHT, type));
     }
 
     // In multiplayer the spawn master fills the level through the portals.
     if (!multiplayerState.connected) {
-        const extra = Math.min(4, gameState.level - 1);
-        for (const [type, x, height] of ENEMY_LAYOUT) {
-            enemies.push(createEnemy(type, x, GROUND_Y - height - CONFIG.ENEMY_SIZE));
+        for (const [type, x, tier] of ENEMY_LAYOUT) {
+            enemies.push(createEnemy(type, x, TIER[tier] - CONFIG.ENEMY_SIZE));
         }
         // Later levels get reinforcements spread across the level.
+        const extra = Math.min(4, gameState.level - 1);
         for (let i = 0; i < extra; i++) {
-            const x = 700 + i * 620;
-            enemies.push(createEnemy(i % 2 ? 'turtle' : 'jumping', x, GROUND_Y - 200));
+            enemies.push(createEnemy(i % 2 ? 'turtle' : 'jumping', 640 + i * 640, TIER.low - CONFIG.ENEMY_SIZE));
         }
 
-        flagpole = new Flagpole(3380, GROUND_Y);
+        flagpole = new Flagpole(FLAGPOLE_X, GROUND_Y);
     }
 
     buildCoins();
@@ -3947,16 +4120,15 @@ function initLevel() {
 }
 
 function buildCoins() {
-    // An arc over every lower platform
-    for (const [x, height, width] of PLATFORM_LAYOUT) {
-        if (height > 200) continue;
-        buildCoinArc(x + width / 2, GROUND_Y - height - 70, 5);
+    // An arc floating above every platform, low tier and mid tier alike
+    for (const [tier, x, width] of PLATFORM_LAYOUT) {
+        buildCoinArc(x + width / 2, TIER[tier] - 70, 5);
     }
 
     // A line along every cloud platform
-    for (const [x, height, width] of CLOUD_LAYOUT) {
+    for (const [x, width] of CLOUD_LAYOUT) {
         for (let i = 0; i < 4; i++) {
-            addCoin(x + 24 + i * 30, GROUND_Y - height - 50);
+            addCoin(x + 26 + i * 32, TIER.high - 46);
         }
     }
 
@@ -3964,12 +4136,12 @@ function buildCoins() {
     for (let i = 0; i < GROUND_SEGMENTS.length - 1; i++) {
         const gapStart = GROUND_SEGMENTS[i].x + GROUND_SEGMENTS[i].width;
         const gapEnd = GROUND_SEGMENTS[i + 1].x;
-        buildCoinArc((gapStart + gapEnd) / 2, GROUND_Y - 130, 3, 40);
+        buildCoinArc((gapStart + gapEnd) / 2, GROUND_Y - 120, 3, 40);
     }
 
-    // A high-value trail across the middle tier
-    for (let i = 0; i < 10; i++) {
-        addCoin(430 + i * 250, GROUND_Y - 330);
+    // A row over each block row, so bumping them is on the way to something
+    for (const row of BLOCK_ROWS) {
+        addCoin(row.x + (row.items.length * GRID) / 2 - CONFIG.COIN_SIZE / 2, BLOCK_ROW_Y - 60);
     }
 }
 
@@ -4068,9 +4240,7 @@ function timeUp() {
     gameState.time = 0;
     showBanner('Time Up!', '', 1800);
     player.health = 1;
-    player.setInvulnerable(false);
-    player.starTimer = 0;
-    player.hit();
+    player.startDeath();
     gameState.time = CONFIG.LEVEL_TIME;
 }
 
@@ -4082,15 +4252,24 @@ function tick() {
     rebuildSolids();
 
     blocks.forEach(block => block.update());
-    portals.forEach(portal => portal.update());
+    if (!(player.dying && !multiplayerState.connected)) {
+        portals.forEach(portal => portal.update());
+    }
 
     // The player moves first so every collision below reads a current position.
     player.update();
 
-    enemies.forEach(enemy => enemy.update());
-    powerUps.forEach(item => item.update());
-    coins.forEach(coin => coin.update());
-    if (flagpole) flagpole.update();
+    // While the player is dying the level holds its breath, the way it does
+    // in the games this is modelled on. Multiplayer keeps running because the
+    // world there belongs to everyone, not just to whoever just died.
+    const frozen = player.dying && !multiplayerState.connected;
+
+    if (!frozen) {
+        enemies.forEach(enemy => enemy.update());
+        powerUps.forEach(item => item.update());
+        coins.forEach(coin => coin.update());
+        if (flagpole) flagpole.update();
+    }
 
     powerUps = powerUps.filter(item => !item.collected);
 
@@ -4105,7 +4284,7 @@ function tick() {
     updateFloatingTexts();
 
     // Countdown timer (single player only)
-    if (!multiplayerState.connected && !gameState.levelCleared) {
+    if (!multiplayerState.connected && !gameState.levelCleared && !player.dying) {
         gameState.timeTicker++;
         if (gameState.timeTicker >= CONFIG.TIME_TICK_FRAMES) {
             gameState.timeTicker = 0;

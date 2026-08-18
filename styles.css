@@ -249,10 +249,17 @@ body {
 /* Centre-screen announcement (level start, level clear, hurry up) */
 .banner {
     position: fixed;
-    top: 32%;
+    top: 22%;
     left: 50%;
     transform: translate(-50%, -50%);
     z-index: 90;
+    padding: 14px 34px;
+    border-radius: 18px;
+    /* The scene behind can be clouds, sky or brick, so the banner carries its
+       own backdrop rather than relying on a text shadow to stay legible. */
+    background: rgba(8, 14, 30, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(6px);
     text-align: center;
     color: white;
     pointer-events: none;

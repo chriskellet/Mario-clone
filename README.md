@@ -46,6 +46,10 @@ and whatever is left on the clock is converted into a time bonus.
 - **Coins** — 50 points each, and every 100 coins is an extra life.
 - **Pits and the clock** — falling into a gap or running the timer out costs a
   life regardless of size.
+- **Dying** — death is a beat, not a teleport. The level freezes, the body pops
+  up and tumbles off the screen, and only then does the world reset. You come
+  back on the last patch of solid ground you stood on, with a moment of grace
+  and a few seconds of invulnerability before control returns.
 - **Levels** — clearing the flagpole awards a life and moves you to the next
   world, with faster enemies and reinforcements each time.
 
@@ -71,6 +75,16 @@ blocked or offline the game falls back to single player automatically.
   without letterboxing and stays sharp on retina panels.
 - **Deterministic levels.** Layout is data-driven and free of `Math.random`, so
   every player in a multiplayer session sees the same platforms and coins.
+- **Grid-aligned level.** Everything sits on a 40px grid — one cell is exactly
+  the player's width and height — and tiers are spaced three cells apart, well
+  inside the ~158px a standing jump clears. Building on the grid is what keeps
+  every gap either genuinely passable or honestly solid; hand-placed geometry
+  drifts into 20 and 30px slots that look like openings but are too tight to
+  walk into. `tests.html` re-checks this on every run.
+- **Collision courtesies.** Clipping a few pixels of a block's corner on the
+  way up slides you past it instead of killing the jump, and resolution always
+  pushes clear of the deepest overlap so nothing ends up embedded in a stack of
+  blocks.
 
 ## Development
 
@@ -80,9 +94,11 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — geometry helpers, the
-collision resolver, level construction, and block/power-up behaviour, alongside
-DOM and configuration checks.
+Open `tests.html` in a browser to run the test suite — 57 checks covering
+geometry helpers, the collision resolver and its corner-correction behaviour,
+level construction, level geometry (no overlapping solids, no impassable gaps,
+every tier reachable, every pit jumpable), block and power-up behaviour, and the
+death and respawn sequence, alongside DOM and configuration checks.
 
 Built with:
 
