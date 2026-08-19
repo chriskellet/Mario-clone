@@ -731,6 +731,19 @@ body.menu-open .rotate-hint {
     background: linear-gradient(135deg, #666 0%, #888 100%);
 }
 
+/* Explains why multiplayer is unavailable, or that a join fell back to solo. */
+.mode-note {
+    font-size: 15px !important;
+    max-width: 22em;
+    margin: 14px auto 0 !important;
+    opacity: 0.75;
+    line-height: 1.4;
+}
+
+.mode-note.hidden {
+    display: none;
+}
+
 @media (max-width: 480px) {
     .continue-hint {
         font-size: 16px;

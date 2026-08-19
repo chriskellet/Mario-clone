@@ -121,12 +121,14 @@
             assert(jumpBtn, 'Jump button not found');
         });
 
-        domTests.test('Start screen exists', () => {
+        domTests.test('Start screen offers both modes', () => {
             const startScreen = document.getElementById('start-screen');
-            const startBtn = document.getElementById('start-btn');
+            const multiplayerBtn = document.getElementById('multiplayer-btn');
+            const singlePlayerBtn = document.getElementById('single-player-btn');
 
             assert(startScreen, 'Start screen not found');
-            assert(startBtn, 'Start button not found');
+            assert(multiplayerBtn, 'Multiplayer button not found');
+            assert(singlePlayerBtn, 'Single player button not found');
         });
 
         domTests.test('Game UI elements exist', () => {
@@ -1240,6 +1242,75 @@
             );
         });
 
+        multiplayerTests.test('Both game modes are defined and distinct', () => {
+            assert(typeof GAME_MODE !== 'undefined', 'GAME_MODE not defined');
+            assert(GAME_MODE.SINGLE !== GAME_MODE.MULTI, 'Modes must be distinguishable');
+        });
+
+        multiplayerTests.test('Single player never opens a connection', async () => {
+            const savedMode = gameState.mode;
+            const savedRunning = gameState.running;
+            let connectCalls = 0;
+            const realConnect = multiplayer.connect;
+            multiplayer.connect = async () => { connectCalls++; return false; };
+
+            try {
+                await startGame(GAME_MODE.SINGLE);
+                assertEqual(connectCalls, 0, 'Single player must not call connect()');
+                assertEqual(gameState.mode, GAME_MODE.SINGLE, 'Mode should be recorded as single');
+            } finally {
+                multiplayer.connect = realConnect;
+                stopLoop();
+                music.stop();
+                gameState.running = savedRunning;
+                gameState.mode = savedMode;
+            }
+        });
+
+        multiplayerTests.test('A failed multiplayer join still starts the game solo', async () => {
+            const savedMode = gameState.mode;
+            const savedRunning = gameState.running;
+            const realConnect = multiplayer.connect;
+            const realDb = multiplayer.db;
+            // Stand in for a reachable Firebase whose sign-in or rules reject us.
+            multiplayer.db = multiplayer.db || {};
+            multiplayer.connect = async () => false;
+
+            try {
+                await startGame(GAME_MODE.MULTI);
+                assert(gameState.running, 'Game should run even when the join fails');
+                assert(!multiplayerState.connected, 'Should not report itself connected');
+            } finally {
+                multiplayer.connect = realConnect;
+                multiplayer.db = realDb;
+                stopLoop();
+                music.stop();
+                gameState.running = savedRunning;
+                gameState.mode = savedMode;
+            }
+        });
+
+        multiplayerTests.test('Play Again repeats the mode that was chosen', async () => {
+            const savedMode = gameState.mode;
+            const savedRunning = gameState.running;
+            const realConnect = multiplayer.connect;
+            let connectCalls = 0;
+            multiplayer.connect = async () => { connectCalls++; return false; };
+
+            try {
+                await startGame(GAME_MODE.SINGLE);
+                await startGame();  // no argument - what "Play Again" does
+                assertEqual(gameState.mode, GAME_MODE.SINGLE, 'Restart should stay in single player');
+                assertEqual(connectCalls, 0, 'Restarting single player must not connect');
+            } finally {
+                multiplayer.connect = realConnect;
+                stopLoop();
+                music.stop();
+                gameState.running = savedRunning;
+                gameState.mode = savedMode;
+            }
+        });
+
         multiplayerTests.test('Coin keys map back to coin objects', () => {
             if (!coins.length) return; // level not built in this harness
             const coin = multiplayer.coinFromKey(`coin_${coins[0].index}`);
@@ -1347,7 +1418,9 @@
         <button id="btn-jump"></button>
     </div>
     <div id="start-screen" style="display:none;">
-        <button id="start-btn"></button>
+        <button id="multiplayer-btn"></button>
+        <button id="single-player-btn"></button>
+        <p id="mode-note" class="hidden"></p>
     </div>
     <div id="game-ui" style="display:none;">
         <div><span id="score"></span></div>

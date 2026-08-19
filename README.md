@@ -70,10 +70,22 @@ assuming running speed since remote velocity is not synced.
 
 ## Multiplayer
 
-When Firebase is reachable, players share a level, see each other move, compete
-on a live leaderboard, and can stomp each other. Pipes spawn enemies under a
-single elected spawn master so everyone sees the same world. If Firebase is
-blocked or offline the game falls back to single player automatically.
+The start screen offers **Multiplayer** and **Single Player**, and the choice is
+explicit — single player never signs in, never reads and never writes, so
+playing solo costs nothing and needs no network at all. "Play Again" repeats
+whichever mode was chosen; **Main Menu** on the game over screen goes back to
+pick again.
+
+In multiplayer, players share a level, see each other move, compete on a live
+leaderboard, and can stomp each other. Pipes spawn enemies under a single
+elected spawn master so everyone sees the same world. Only the name field
+matters here — it is what other players see.
+
+Multiplayer can be unavailable in two ways, and they surface differently. If the
+Firebase SDK never loaded there is nothing to join, so the button is disabled on
+the menu with a note saying why. If the SDK loaded but sign-in or the rules
+reject the join, that cannot be known until you press the button: the run starts
+solo and says so in the level banner.
 
 ### Firebase setup
 
