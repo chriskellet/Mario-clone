@@ -42,6 +42,7 @@ const CONFIG = {
 
     // --- Collision courtesies ---
     CORNER_CORRECTION: 10,    // Slide past a block corner clipped by this much
+    SHADOW_FADE_DISTANCE: 260, // Height at which a cast shadow fades out
 
     // --- Entities ---
     PLAYER_SIZE: 40,
@@ -1444,6 +1445,49 @@ function slideAroundCorner(entity, ceiling, solids, maxNudge, ignoreOneWay) {
     return true;
 }
 
+/** Top of the nearest solid directly beneath a box, or null over a pit. */
+function surfaceBelow(box) {
+    const feet = box.y + box.height;
+    let best = null;
+    for (const solid of solidCache) {
+        if (solid.x >= box.x + box.width || solid.x + solid.width <= box.x) continue;
+        if (solid.y < feet - 0.5) continue;               // must actually be below
+        if (best === null || solid.y < best) best = solid.y;
+    }
+    return best;
+}
+
+/**
+ * Draws a contact shadow on whatever the entity is above, rather than pinned
+ * under its feet. A shadow that travels with a jumping sprite reads as a
+ * sticker; one that stays on the floor and fades with height reads as light.
+ */
+function drawGroundShadow(entity, centerScreenX) {
+    const surface = surfaceBelow(entity);
+    if (surface === null) return;                         // nothing below - over a pit
+
+    const drop = surface - (entity.y + entity.height);
+    if (drop > CONFIG.SHADOW_FADE_DISTANCE) return;
+
+    const closeness = clamp(1 - drop / CONFIG.SHADOW_FADE_DISTANCE, 0, 1);
+    const screenY = surface - gameState.camera.y;
+    if (screenY < -20 || screenY > view.h + 20) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.05 + 0.17 * closeness;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(
+        centerScreenX,
+        screenY + 2,
+        (entity.width / 2.3) * (0.55 + 0.45 * closeness),
+        4.5 * (0.5 + 0.5 * closeness),
+        0, 0, Math.PI * 2
+    );
+    ctx.fill();
+    ctx.restore();
+}
+
 // Is there something to stand on just past the entity's leading edge?
 function hasFloorAhead(entity, direction) {
     const probeX = direction > 0 ? entity.x + entity.width + 4 : entity.x - 4;
@@ -2086,6 +2130,8 @@ class Player {
             return;
         }
 
+        drawGroundShadow(this, screenX + this.width / 2);
+
         let alpha = 1;
         if (this.invulnerable && Math.floor(Date.now() / 80) % 2 === 0) alpha = 0.45;
 
@@ -2129,12 +2175,6 @@ function drawMarioSprite(ctx, o) {
 
     ctx.save();
     ctx.globalAlpha = o.alpha === undefined ? 1 : o.alpha;
-
-    // Shadow (drawn before the squash transform so it stays on the floor)
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
-    ctx.beginPath();
-    ctx.ellipse(o.x + o.width / 2, o.y + o.height + 3, o.width / 2.4, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
 
     // The artwork is authored 40 units tall standing on the origin, so one
     // transform handles size, facing and squash-and-stretch about the feet.
@@ -2337,12 +2377,17 @@ function drawRemotePlayer(playerData) {
     const isAFK = timeSinceUpdate > 10000;
 
     const remoteBig = (playerData.health === undefined ? 2 : playerData.health) > 1;
+    const remoteHeight = remoteBig ? CONFIG.PLAYER_SIZE : CONFIG.SMALL_PLAYER_HEIGHT;
+    drawGroundShadow(
+        { x, y, width: CONFIG.PLAYER_SIZE, height: remoteHeight },
+        screenX + CONFIG.PLAYER_SIZE / 2
+    );
 
     drawMarioSprite(ctx, {
         x: screenX,
         y: screenY,
         width: CONFIG.PLAYER_SIZE,
-        height: remoteBig ? CONFIG.PLAYER_SIZE : CONFIG.SMALL_PLAYER_HEIGHT,
+        height: remoteHeight,
         big: remoteBig,
         direction: playerData.direction || 1,
         palette: playerData.color || PLAYER_COLORS[0],
@@ -2404,7 +2449,7 @@ class Enemy {
         this.animTime = Math.floor(Math.random() * 60);
         this.deathTimer = 0;      // Frames left of the squashed-death pose
         this.respawnTime = null;
-        this.turnsAtLedges = true;
+        this.turnsAtLedges = true;   // See avoidsLedges()
         this.scoreValue = 100;
         this.color = '#D2691E';
     }
@@ -2456,7 +2501,7 @@ class Enemy {
         }
 
         // Turn around rather than stroll off a ledge
-        if (this.onGround && this.turnsAtLedges && this.velocityX !== 0 &&
+        if (this.onGround && this.avoidsLedges() && this.velocityX !== 0 &&
             !hasFloorAhead(this, Math.sign(this.velocityX))) {
             this.velocityX = -this.velocityX;
         }
@@ -2468,6 +2513,11 @@ class Enemy {
     }
 
     onWallHit() {}
+
+    /** Whether this enemy stops at the edge of a drop. */
+    avoidsLedges() {
+        return this.turnsAtLedges;
+    }
 
     handlePlayerCollision() {
         if (player.outOfLives || !player.checkCollision(this)) return;
@@ -2591,11 +2641,7 @@ class Enemy {
         if (!pos) return;
         const { screenX, screenY } = pos;
 
-        // Shadow
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-        ctx.beginPath();
-        ctx.ellipse(screenX + this.width / 2, screenY + this.height + 3, this.width / 2.5, 4, 0, 0, Math.PI * 2);
-        ctx.fill();
+        drawGroundShadow(this, screenX + this.width / 2);
 
         const cx = screenX + this.width / 2;
         const waddle = this.alive ? Math.sin(this.animTime * 0.18) * 2 : 0;
@@ -2705,11 +2751,7 @@ class JumpingEnemy extends Enemy {
         const cx = screenX + this.width / 2;
         const bottom = screenY + this.height;
 
-        // Shadow
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-        ctx.beginPath();
-        ctx.ellipse(cx, bottom + 3, this.width / 2.5, 4, 0, 0, Math.PI * 2);
-        ctx.fill();
+        drawGroundShadow(this, cx);
 
         // Springy blob body
         const bodyGradient = ctx.createRadialGradient(cx - w / 5, bottom - h * 0.7, 2, cx, bottom - h / 2, w / 1.4);
@@ -2802,6 +2844,15 @@ class TurtleEnemy extends Enemy {
 
     onWallHit() {
         if (this.isShellSliding) sounds.bump();
+    }
+
+    /**
+     * A turtle on its feet is careful about drops. A kicked shell is not: it
+     * is a projectile, and it should sail off the edge and into the pit rather
+     * than politely bouncing back off thin air.
+     */
+    avoidsLedges() {
+        return !this.isShellSliding;
     }
 
     stopShell() {
@@ -2898,11 +2949,7 @@ class TurtleEnemy extends Enemy {
 
         const cx = screenX + this.width / 2;
 
-        // Shadow
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-        ctx.beginPath();
-        ctx.ellipse(cx, screenY + this.height + 3, this.width / 2.5, 4, 0, 0, Math.PI * 2);
-        ctx.fill();
+        drawGroundShadow(this, cx);
 
         if (this.inShell) {
             const shellHeight = this.height * 0.62;
@@ -3311,6 +3358,8 @@ class PowerUp {
         const screenY = this.y - gameState.camera.y;
         if (screenX < -60 || screenX > view.w + 60) return;
 
+        drawGroundShadow(this, screenX + this.width / 2);
+
         ctx.save();
         const cx = screenX + this.width / 2;
         const cy = screenY + this.height / 2;
@@ -3342,12 +3391,6 @@ class PowerUp {
             ctx.ellipse(3.5, 0, 1.6, 2.6, 0, 0, Math.PI * 2);
             ctx.fill();
         } else {
-            // Shadow
-            ctx.fillStyle = 'rgba(0,0,0,0.2)';
-            ctx.beginPath();
-            ctx.ellipse(cx, screenY + this.height + 2, this.width / 2.6, 3, 0, 0, Math.PI * 2);
-            ctx.fill();
-
             // Stem
             ctx.fillStyle = '#FFF3D6';
             ctx.beginPath();

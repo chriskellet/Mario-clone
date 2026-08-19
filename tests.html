@@ -663,7 +663,116 @@
             assertEqual(Math.round(body.x + body.width), 100, 'body should rest against the first block');
         });
 
-        // Test Suite 14: PWA
+        // Test Suite 14: Enemy behaviour at edges
+        const edgeTests = new TestRunner('Enemies at Edges');
+
+        edgeTests.test('a walking turtle stops at a ledge', () => {
+            initLevel();
+            const seg = platforms.filter(p => p.variant === 'ground')[0];
+            const turtle = new TurtleEnemy(seg.x + seg.width - 60, seg.y - CONFIG.ENEMY_SIZE);
+            turtle.velocityX = 2;                 // heading for the drop
+            enemies.push(turtle);
+            rebuildSolids();
+            for (let i = 0; i < 90; i++) turtle.update();
+            assert(turtle.velocityX < 0, 'a walking turtle should turn back from the edge');
+            assert(turtle.y < CONFIG.WORLD_HEIGHT, 'a walking turtle should not fall in');
+        });
+
+        edgeTests.test('a kicked shell sails off the edge instead of bouncing back', () => {
+            initLevel();
+            const seg = platforms.filter(p => p.variant === 'ground')[0];
+            const turtle = new TurtleEnemy(seg.x + seg.width - 120, seg.y - CONFIG.ENEMY_SIZE);
+            enemies.push(turtle);
+            rebuildSolids();
+
+            turtle.inShell = true;
+            turtle.kickShell(true);               // kicked to the right, toward the pit
+            assert(turtle.isShellSliding, 'shell should be sliding');
+            assert(!turtle.avoidsLedges(), 'a sliding shell should ignore ledges');
+
+            const startX = turtle.x;
+            for (let i = 0; i < 120 && turtle.alive; i++) turtle.update();
+            assert(turtle.x > startX, 'the shell should keep travelling toward the drop');
+            assert(!turtle.alive || turtle.y > seg.y, 'the shell should have gone over the edge');
+        });
+
+        edgeTests.test('a shell that falls in a pit is gone, not scored', () => {
+            initLevel();
+            const seg = platforms.filter(p => p.variant === 'ground')[0];
+            const turtle = new TurtleEnemy(seg.x + seg.width - 60, seg.y - CONFIG.ENEMY_SIZE);
+            enemies.push(turtle);
+            rebuildSolids();
+            turtle.inShell = true;
+            turtle.kickShell(true);
+            const scoreBefore = gameState.score;
+            for (let i = 0; i < 240 && turtle.alive; i++) turtle.update();
+            assert(!turtle.alive, 'the shell should be gone');
+            assertEqual(gameState.score, scoreBefore, 'falling in a pit should not award points');
+        });
+
+        // Test Suite 15: Shadows
+        const shadowTests = new TestRunner('Cast Shadows');
+
+        // Finds ground with nothing stacked above it, so the tests measure the
+        // shadow logic rather than whatever block happens to be overhead.
+        function openGroundColumn() {
+            initLevel();
+            rebuildSolids();
+            const ground = platforms.filter(p => p.variant === 'ground');
+            for (const seg of ground) {
+                for (let x = seg.x + 40; x < seg.x + seg.width - 80; x += 20) {
+                    const column = { x, y: 0, width: 40, height: seg.y - 4 };
+                    const blocked = solidCache.some(sol => sol !== seg && overlaps(column, sol));
+                    if (!blocked) return { seg, x };
+                }
+            }
+            return null;
+        }
+
+        shadowTests.test('surfaceBelow finds the floor under a body', () => {
+            const spot = openGroundColumn();
+            assert(spot, 'level should have at least one open column');
+            const box = { x: spot.x, y: 100, width: 40, height: 40 };
+            assertEqual(surfaceBelow(box), spot.seg.y, 'should find the ground below');
+        });
+
+        shadowTests.test('surfaceBelow lands on the nearest surface, not the floor', () => {
+            initLevel();
+            rebuildSolids();
+            // Directly under a block row, the shadow belongs on the block.
+            const block = blocks.find(b => !b.destroyed && b.y < GROUND_Y - 80);
+            const box = { x: block.x + 4, y: block.y - 200, width: 32, height: 40 };
+            assertEqual(surfaceBelow(box), block.y, 'shadow should fall on the block, not the ground');
+        });
+
+        shadowTests.test('surfaceBelow reports nothing when there is no floor', () => {
+            initLevel();
+            rebuildSolids();
+            const saved = solidCache;
+            try {
+                solidCache = [{ x: 0, y: 500, width: 100, height: 40 }];
+                assertEqual(surfaceBelow({ x: 200, y: 100, width: 40, height: 40 }), null,
+                    'a body over open air should cast no shadow');
+                assertEqual(surfaceBelow({ x: 20, y: 100, width: 40, height: 40 }), 500,
+                    'a body over a floor should find it');
+                assertEqual(surfaceBelow({ x: 20, y: 600, width: 40, height: 40 }), null,
+                    'a surface above the body is not below it');
+            } finally {
+                solidCache = saved;
+            }
+        });
+
+        shadowTests.test('the shadow stays put as the body rises', () => {
+            const spot = openGroundColumn();
+            const low = { x: spot.x, y: spot.seg.y - 40, width: 40, height: 40 };
+            const high = { x: spot.x, y: spot.seg.y - 200, width: 40, height: 40 };
+            // Both resolve to the same surface: the shadow does not travel with
+            // the jump the way a sprite-attached one did.
+            assertEqual(surfaceBelow(low), surfaceBelow(high), 'shadow target should not move with the jump');
+            assertEqual(surfaceBelow(high), spot.seg.y, 'shadow should stay on the ground');
+        });
+
+        // Test Suite 16: PWA
         const pwaTests = new TestRunner('PWA Support');
 
         pwaTests.test('Manifest link exists', () => {
@@ -691,6 +800,8 @@
                 geometryTests,
                 deathTests,
                 courtesyTests,
+                edgeTests,
+                shadowTests,
                 pwaTests
             ];
 
