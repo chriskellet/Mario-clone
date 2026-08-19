@@ -143,12 +143,12 @@
             console.warn('Firebase SDK did not load - running in single player.');
         }
     </script>
-    <script src="game.js?v=5"></script>
+    <script src="game.js?v=6"></script>
     <script>
         // Register service worker for PWA support with auto-update
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js?v=5')
+                navigator.serviceWorker.register('sw.js?v=6')
                     .then(reg => {
                         console.log('Service Worker registered');
 
