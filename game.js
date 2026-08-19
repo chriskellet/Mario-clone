@@ -69,6 +69,8 @@ const CONFIG = {
     MAX_ENEMIES_PER_TYPE: 3,
     PORTAL_SPAWN_MIN: 900,     // 15s between spawns at the very least
     PORTAL_SPAWN_RANGE: 600,   // ...up to 25s
+    SPAWN_SAFE_RADIUS: 260,    // Never appear this close to a player
+    SPAWN_LOOKAHEAD_FRAMES: 45, // ...nor within 0.75s of travel ahead of one
     enemySpeedScale: 1,        // Raised each level by initLevel()
 
     // --- World ---
@@ -3063,31 +3065,20 @@ class TurtleEnemy extends Enemy {
         ctx.lineTo(cx + 9 - legSwing, screenY + this.height - 2);
         ctx.stroke();
 
-        // Head
-        ctx.fillStyle = '#8BC34A';
-        ctx.beginPath();
-        ctx.ellipse(cx + look * 10, screenY + this.height * 0.45, 7, 6, 0, 0, Math.PI * 2);
-        ctx.fill();
+        // Shell first, then the head on top of it. Painting the shell last
+        // buried all but a few pixels of the head behind it.
+        const shellCX = cx - look * 5;
+        const shellCY = screenY + this.height * 0.5;
+        const shellRX = this.width / 2.7;
+        const shellRY = this.height / 2.7;
 
-        // Eye
-        ctx.fillStyle = 'white';
-        ctx.beginPath();
-        ctx.arc(cx + look * 12, screenY + this.height * 0.4, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'black';
-        ctx.beginPath();
-        ctx.arc(cx + look * 13, screenY + this.height * 0.4, 1.5, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Shell
-        const shellGradient = ctx.createRadialGradient(cx - 5, screenY + 10, 2, cx, screenY + this.height * 0.5, this.width / 2);
+        const shellGradient = ctx.createRadialGradient(shellCX - 4, shellCY - 6, 2, shellCX, shellCY, shellRX * 1.4);
         shellGradient.addColorStop(0, '#4CAF50');
         shellGradient.addColorStop(1, this.shellColor);
         ctx.fillStyle = shellGradient;
         ctx.beginPath();
-        ctx.ellipse(cx - look * 2, screenY + this.height * 0.48, this.width / 2.3, this.height / 2.6, 0, 0, Math.PI * 2);
+        ctx.ellipse(shellCX, shellCY, shellRX, shellRY, 0, 0, Math.PI * 2);
         ctx.fill();
-
         ctx.strokeStyle = '#F5DEB3';
         ctx.lineWidth = 2.5;
         ctx.stroke();
@@ -3097,9 +3088,37 @@ class TurtleEnemy extends Enemy {
         for (let i = 0; i < 5; i++) {
             const angle = (i / 5) * Math.PI * 2;
             ctx.beginPath();
-            ctx.arc(cx - look * 2 + Math.cos(angle) * 7, screenY + this.height * 0.48 + Math.sin(angle) * 5, 2.6, 0, Math.PI * 2);
+            ctx.arc(shellCX + Math.cos(angle) * 6, shellCY + Math.sin(angle) * 4.5, 2.4, 0, Math.PI * 2);
             ctx.fill();
         }
+
+        // Neck, then head, clear of the shell's leading edge
+        const headX = cx + look * 11;
+        const headY = screenY + this.height * 0.42;
+        ctx.fillStyle = '#8BC34A';
+        ctx.beginPath();
+        ctx.roundRect(Math.min(shellCX, headX), headY - 3.5, Math.abs(headX - shellCX), 7, 3);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.ellipse(headX, headY, 7.5, 6.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Snout
+        ctx.fillStyle = '#A5D96A';
+        ctx.beginPath();
+        ctx.ellipse(headX + look * 4, headY + 2, 4, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Eye
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.arc(headX + look * 1.5, headY - 2, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#1B2A4A';
+        ctx.beginPath();
+        ctx.arc(headX + look * 2.5, headY - 2, 1.6, 0, Math.PI * 2);
+        ctx.fill();
 
         ctx.restore();
     }
@@ -3629,24 +3648,56 @@ class Portal {
             return;
         }
 
-        // Don't spawn on top of anybody
-        const safetyDistance = 200;
-        let playerTooClose = Math.hypot(player.x - this.x, player.y - this.y) < safetyDistance;
+        // Don't drop an enemy into anybody's lap
+        let blocked = this.spawnWouldAmbush(
+            player.x, player.y, player.width, player.height,
+            player.velocityX, player.direction
+        );
 
-        if (!playerTooClose && multiplayerState.connected) {
+        if (!blocked && multiplayerState.connected) {
             multiplayerState.remotePlayers.forEach((remotePlayer) => {
-                if (Math.hypot(remotePlayer.x - this.x, remotePlayer.y - this.y) < safetyDistance) {
-                    playerTooClose = true;
+                const big = (remotePlayer.health === undefined ? 2 : remotePlayer.health) > 1;
+                const w = big ? CONFIG.PLAYER_WIDTH : CONFIG.SMALL_PLAYER_WIDTH;
+                const h = big ? CONFIG.PLAYER_SIZE : CONFIG.SMALL_PLAYER_HEIGHT;
+                // Remote velocity is not synced, so assume they might be running.
+                if (this.spawnWouldAmbush(remotePlayer.x, remotePlayer.y, w, h, 0, remotePlayer.direction)) {
+                    blocked = true;
                 }
             });
         }
 
-        if (playerTooClose) {
-            this.spawnCooldown = 60; // Player too close, check again in 1 second
+        if (blocked) {
+            this.spawnCooldown = 90; // Someone is too close, look again shortly
         } else {
             this.spawning = true;
             this.spawnProgress = 0;
         }
+    }
+
+    /**
+     * True when an enemy appearing here would be unfair: right beside a player
+     * standing still, or in the stretch of level a moving player is about to
+     * cover. The old rule was a flat 200px circle, which ignores which way you
+     * are heading and, at running speed, is well under a second of warning.
+     */
+    spawnWouldAmbush(px, py, pw, ph, vx, facing) {
+        const spawnX = this.x + this.width / 2;
+        const spawnY = this.y - CONFIG.ENEMY_SIZE / 2;
+        const dx = spawnX - (px + pw / 2);
+        const dy = spawnY - (py + ph / 2);
+
+        // Close on any side, however they are moving.
+        if (Math.hypot(dx, dy) < CONFIG.SPAWN_SAFE_RADIUS) return true;
+
+        // Beyond that, only the band roughly level with the player can be run into.
+        if (Math.abs(dy) > CONFIG.SPAWN_SAFE_RADIUS) return false;
+
+        const heading = vx !== 0 ? Math.sign(vx) : (facing || 0);
+        if (heading === 0 || Math.sign(dx) !== heading) return false;
+
+        const speed = Math.abs(vx) || CONFIG.RUN_SPEED;
+        const reach = CONFIG.SPAWN_SAFE_RADIUS + speed * CONFIG.SPAWN_LOOKAHEAD_FRAMES;
+        return Math.abs(dx) < reach;
     }
 
     checkCollision(obj) {

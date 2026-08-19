@@ -39,8 +39,8 @@ and whatever is left on the clock is converted into a time bonus.
   slowly, and anything that does fall into a pit is gone for good.
 - **Turtles** — one stomp tucks them into a shell, a second kick sends the shell
   sliding, and a sliding shell mows down everything in its path. Stomp a moving
-  shell to stop it dead. A walking turtle turns back at a ledge; a kicked shell
-  is a projectile and sails straight off into the pit.
+  shell to stop it dead. A walking turtle turns back at a ledge and shows its
+  head; a kicked shell is a projectile and sails straight off into the pit.
 - **Blocks** — head-butt `?` blocks for coins and power-ups. Big Mario smashes
   brick blocks; small Mario just bumps them. Bumping a block flips any enemy
   standing on top of it.
@@ -55,6 +55,16 @@ and whatever is left on the clock is converted into a time bonus.
   and a few seconds of invulnerability before control returns.
 - **Levels** — clearing the flagpole awards a life and moves you to the next
   world, with faster enemies and reinforcements each time.
+
+## Fair spawning
+
+Pipes never drop an enemy into somebody's lap. A spawn is held off while any
+player is within 260px in any direction — so nothing appears beside you while
+you stand still — and, if the pipe is ahead of a moving player, for as far as
+that player will travel in the next three quarters of a second. At a sprint
+that is nearly 600px of clearance, so you never round a corner into a
+freshly-spawned enemy. In multiplayer the same rule applies to every player,
+assuming running speed since remote velocity is not synced.
 
 ## Multiplayer
 
@@ -107,13 +117,14 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 74 checks covering
+Open `tests.html` in a browser to run the test suite — 80 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, level geometry (no overlapping solids, no impassable gaps,
 every tier reachable, every pit jumpable), block and power-up behaviour, and the
 death and respawn sequence, enemy behaviour at ledges, enemy population
-limits, hitbox fidelity against the rendered sprite, and shadow casting,
-alongside DOM and configuration checks.
+limits, fair spawning, hitbox fidelity against the rendered sprite, enemy
+artwork (the turtle's head is scanned for in the rendered frame), and shadow
+casting, alongside DOM and configuration checks.
 
 Built with:
 
