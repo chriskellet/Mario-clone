@@ -559,12 +559,34 @@
 
         deathTests.test('a lethal hit starts a death sequence instead of teleporting', () => {
             initLevel();
-            const spot = { x: player.x, y: player.y };
-            player.health = 1;
+            player.health = 1;                 // shrinking recentres the box
             player.setInvulnerable(false);
+            const spot = { x: player.x, y: player.y };
             player.hit();
             assert(player.dying, 'player should be dying');
             assertEqual(Math.round(player.x), Math.round(spot.x), 'player should not move on the hit frame');
+        });
+
+        deathTests.test('changing size keeps the sprite centred and out of walls', () => {
+            initLevel();
+            rebuildSolids();
+            player.health = 2;
+            const bigCentre = player.x + player.width / 2;
+            player.health = 1;
+            assertEqual(Math.round(player.x + player.width / 2), Math.round(bigCentre),
+                'shrinking should keep the same centre');
+            player.health = 2;
+            assertEqual(Math.round(player.x + player.width / 2), Math.round(bigCentre),
+                'growing should return to the same centre');
+
+            // Growing hard against a wall must not leave the player inside it.
+            const wall = blocks.find(b => b.type === 'solid' && !b.destroyed);
+            player.health = 1;
+            player.x = wall.x - player.width;          // flush against its left face
+            player.y = wall.y;
+            player.health = 2;
+            assert(!solidCache.some(s => !s.oneWay && overlaps(player, s)),
+                'growing next to a wall should push the player clear');
         });
 
         deathTests.test('the death animation holds still before falling away', () => {
@@ -772,7 +794,120 @@
             assertEqual(surfaceBelow(high), spot.seg.y, 'shadow should stay on the ground');
         });
 
-        // Test Suite 16: PWA
+        // Test Suite 16: Hitbox fidelity
+        // The collision box was a flat 40 wide while the artwork is 28, so a
+        // third of the player was invisible padding that still bumped blocks.
+        // This renders the sprite and scans it, so the two cannot drift apart.
+        const hitboxTests = new TestRunner('Hitbox Fidelity');
+
+        function spriteBounds(big) {
+            const BOX = 200, ox = 80, oy = 80;
+            const c = document.createElement('canvas');
+            c.width = BOX; c.height = BOX;
+            const g = c.getContext('2d');
+            const w = big ? CONFIG.PLAYER_WIDTH : CONFIG.SMALL_PLAYER_WIDTH;
+            const h = big ? CONFIG.PLAYER_SIZE : CONFIG.SMALL_PLAYER_HEIGHT;
+
+            drawMarioSprite(g, {
+                x: ox, y: oy, width: w, height: h, big, direction: 1,
+                palette: PLAYER_COLORS[0], alpha: 1, squash: 1,
+                onGround: true, velocityY: 0, walkPhase: 0, moving: false, skidding: false,
+            });
+
+            const data = g.getImageData(0, 0, BOX, BOX).data;
+            let minX = 1e9, maxX = -1e9;
+            for (let y = 0; y < BOX; y++) {
+                for (let x = 0; x < BOX; x++) {
+                    if (data[(y * BOX + x) * 4 + 3] > 12) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                    }
+                }
+            }
+            return { left: minX - ox, right: (ox + w) - maxX, width: maxX - minX + 1, box: w };
+        }
+
+        hitboxTests.test('big Mario\'s box matches his artwork', () => {
+            const b = spriteBounds(true);
+            assert(Math.abs(b.left) <= 2, `${b.left}px of empty box on the left`);
+            assert(Math.abs(b.right) <= 2, `${b.right}px of empty box on the right`);
+        });
+
+        hitboxTests.test('small Mario\'s box matches his artwork', () => {
+            const b = spriteBounds(false);
+            assert(Math.abs(b.left) <= 2, `${b.left}px of empty box on the left`);
+            assert(Math.abs(b.right) <= 2, `${b.right}px of empty box on the right`);
+        });
+
+        hitboxTests.test('the player is narrower than a grid cell', () => {
+            // A body as wide as the cell cannot fit through a one-cell gap
+            // without pixel-perfect alignment.
+            assert(CONFIG.PLAYER_WIDTH < GRID, 'player should fit inside a grid cell');
+            assert(CONFIG.SMALL_PLAYER_WIDTH < CONFIG.PLAYER_WIDTH, 'small should be narrower than big');
+        });
+
+        hitboxTests.test('a block only reacts when the body actually reaches it', () => {
+            initLevel();
+            rebuildSolids();
+            const block = blocks.find(b => b.type === 'question' && !b.used);
+            const body = {
+                x: block.x + block.width + 1,        // clear of the block, to its right
+                y: block.y + block.height + 4,
+                width: CONFIG.PLAYER_WIDTH, height: CONFIG.PLAYER_SIZE,
+                velocityX: 0, velocityY: -12, onGround: false,
+            };
+            const hit = moveAndCollide(body, { solids: [block], cornerCorrection: CONFIG.CORNER_CORRECTION });
+            assert(!hit.ceiling, 'a body beside the block should not bump it');
+        });
+
+        // Test Suite 17: Enemy population
+        const populationTests = new TestRunner('Enemy Population');
+
+        populationTests.test('hoppers stop at a drop rather than leaping in', () => {
+            const hopper = new JumpingEnemy(0, 0);
+            assert(hopper.avoidsLedges(), 'jumping enemies should respect ledges');
+        });
+
+        populationTests.test('falling in a pit is permanent', () => {
+            initLevel();
+            rebuildSolids();
+            const e = enemies[0];
+            e.alive = true;
+            e.despawn();
+            assert(!e.alive, 'the enemy should be gone');
+            assertEqual(e.respawnTime, null, 'a pit fall should not queue a respawn');
+        });
+
+        populationTests.test('a stomped enemy does still come back', () => {
+            initLevel();
+            const e = enemies.find(en => en.constructor.name === 'Enemy');
+            e.alive = true;
+            e.die(false);
+            assert(e.respawnTime, 'stomped enemies should respawn to keep the level alive');
+        });
+
+        populationTests.test('pipes are rate limited', () => {
+            assert(CONFIG.PORTAL_SPAWN_MIN >= 600, 'pipes should wait at least 10s between spawns');
+            assert(CONFIG.MAX_ENEMIES_PER_TYPE <= 4, 'too many of one enemy type allowed at once');
+        });
+
+        populationTests.test('a pipe will not spawn past the cap', () => {
+            initLevel();
+            const portal = portals[0];
+            const type = portal.enemyType;
+            // Fill the level past the cap for this type
+            for (let i = 0; i < CONFIG.MAX_ENEMIES_PER_TYPE + 2; i++) {
+                enemies.push(createEnemy(type, 200 + i * 60, GROUND_Y - CONFIG.ENEMY_SIZE));
+            }
+            portal.spawnCooldown = 0;
+            portal.spawning = false;
+            const before = enemies.length;
+            portal.update();
+            assert(!portal.spawning, 'the pipe should hold off while the cap is reached');
+            assertEqual(enemies.length, before, 'no enemy should have been added');
+        });
+
+        // Test Suite 18: PWA
         const pwaTests = new TestRunner('PWA Support');
 
         pwaTests.test('Manifest link exists', () => {
@@ -802,6 +937,8 @@
                 courtesyTests,
                 edgeTests,
                 shadowTests,
+                hitboxTests,
+                populationTests,
                 pwaTests
             ];
 

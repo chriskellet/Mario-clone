@@ -34,7 +34,9 @@ and whatever is left on the clock is converted into a time bonus.
   just after stepping off a ledge, and jump buffering (8 frames) means a press
   made slightly before you land still fires.
 - **Enemies** — stomp them from above. Consecutive stomps in one airborne
-  sequence build a multiplier up to 10x; landing ends the chain.
+  sequence build a multiplier up to 10x; landing ends the chain. Everything
+  stops at a drop rather than marching into it, pipes top the level back up
+  slowly, and anything that does fall into a pit is gone for good.
 - **Turtles** — one stomp tucks them into a shell, a second kick sends the shell
   sliding, and a sliding shell mows down everything in its path. Stomp a moving
   shell to stop it dead. A walking turtle turns back at a ledge; a kicked shell
@@ -86,6 +88,12 @@ blocked or offline the game falls back to single player automatically.
   way up slides you past it instead of killing the jump, and resolution always
   pushes clear of the deepest overlap so nothing ends up embedded in a stack of
   blocks.
+- **Hitboxes that match the artwork.** The player's collision box is the
+  measured size of the drawn sprite (28x40 big, 22x30 small), not the 40px
+  grid cell. It used to be a flat 40 wide, so a third of big Mario — and
+  nearly half of small Mario — was invisible padding that still bumped blocks
+  and enemies. `tests.html` renders the sprite and scans its pixels, so the
+  box and the art cannot drift apart again.
 - **Cast shadows.** Shadows are projected onto the nearest surface beneath a
   body — ground, platform or block — and fade with height, rather than being
   pinned under the sprite's feet where they travel along with a jump and read
@@ -99,11 +107,12 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 64 checks covering
+Open `tests.html` in a browser to run the test suite — 74 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, level geometry (no overlapping solids, no impassable gaps,
 every tier reachable, every pit jumpable), block and power-up behaviour, and the
-death and respawn sequence, enemy behaviour at ledges, and shadow casting,
+death and respawn sequence, enemy behaviour at ledges, enemy population
+limits, hitbox fidelity against the rendered sprite, and shadow casting,
 alongside DOM and configuration checks.
 
 Built with:
