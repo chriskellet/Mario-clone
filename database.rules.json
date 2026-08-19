@@ -1,23 +1,4 @@
 {
-  "//": [
-    "Realtime Database rules for the 'marioish' project.",
-    "",
-    "Deploy with:  firebase deploy --only database",
-    "or paste into Firebase console > Realtime Database > Rules.",
-    "",
-    "Requires the Anonymous sign-in provider to be enabled under",
-    "Authentication > Sign-in method. Without it every client falls back to",
-    "single player, because game.js refuses to connect unauthenticated.",
-    "",
-    "Anonymous auth is not a gate on who can play - anyone holding the public",
-    "web config can mint a token. It exists so that auth.uid is server-verified,",
-    "which lets these rules pin each player to their own node. That stops the",
-    "griefing that actually matters in a game like this: editing someone else's",
-    "score, impersonating another player, or wiping the world in one write.",
-    "The size and shape limits below matter for the same reason - names are",
-    "rendered in every other player's leaderboard."
-  ],
-
   "rules": {
     ".read": false,
     ".write": false,
@@ -48,7 +29,6 @@
       ".read": "auth != null",
 
       "$coin": {
-        "//": "A coin node exists only while the coin is banked. Anyone may claim a free coin or clear an expired one; nobody may overwrite a live claim, which is what stops two players banking the same coin.",
         ".write": "auth != null && (!data.exists() || !newData.exists() || data.child('collectedBy').val() === auth.uid)",
         ".validate": "newData.hasChildren(['collected', 'collectedBy'])",
 
@@ -61,12 +41,12 @@
     },
 
     "enemies": {
-      "//": "Shared world state. Only the elected spawn master writes positions, but the election is client-side so the rules cannot enforce which client that is - any signed-in player may write here.",
       ".read": "auth != null",
       ".write": "auth != null",
 
       "$enemy": {
         ".validate": "!newData.exists() || newData.hasChildren(['x', 'y'])",
+
         "x": { ".validate": "newData.isNumber()" },
         "y": { ".validate": "newData.isNumber()" },
         "velocityX": { ".validate": "newData.isNumber()" },
@@ -81,7 +61,6 @@
 
     "hits": {
       "$victim": {
-        "//": "A per-player inbox. You read your own; anyone may post a claim into yours, and the victim's client decides whether to accept it. Only the victim can clear it.",
         ".read": "auth != null && auth.uid === $victim",
 
         "$hit": {
@@ -101,14 +80,13 @@
     },
 
     "allTimeLeaderboard": {
-      "//": "Read by the start screen. Written through a transaction that trims to the top 10, so the whole node is rewritten as one value.",
       ".read": true,
       ".write": "auth != null",
-      "//indexOn": "The start screen reads this with orderByChild('score'); without the index Firebase downloads the whole node and sorts on the client.",
       ".indexOn": "score",
 
       "$entry": {
         ".validate": "newData.hasChildren(['name', 'score'])",
+
         "name": { ".validate": "newData.isString() && newData.val().length <= 15" },
         "score": { ".validate": "newData.isNumber() && newData.val() >= 0" },
         "timestamp": { ".validate": "newData.isNumber()" },

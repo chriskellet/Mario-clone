@@ -39,13 +39,15 @@ and whatever is left on the clock is converted into a time bonus.
   slowly, and anything that does fall into a pit is gone for good.
 - **Turtles** — one stomp tucks them into a shell, a second kick sends the shell
   sliding, and a sliding shell mows down everything in its path. Stomp a moving
-  shell to stop it dead. A walking turtle turns back at a ledge; a kicked shell
-  is a projectile and sails straight off into the pit.
+  shell to stop it dead. A walking turtle turns back at a ledge and shows its
+  head; a kicked shell is a projectile and sails straight off into the pit.
 - **Blocks** — head-butt `?` blocks for coins and power-ups. Big Mario smashes
   brick blocks; small Mario just bumps them. Bumping a block flips any enemy
   standing on top of it.
 - **Power-ups** — a mushroom makes you big (one free hit and the ability to
   smash bricks); a star makes you briefly invincible and lethal on contact.
+  Like everything else that walks, a loose power-up turns back at a drop
+  instead of throwing itself into the pit a second after you earned it.
 - **Coins** — 50 points each, and every 100 coins is an extra life.
 - **Pits and the clock** — falling into a gap or running the timer out costs a
   life regardless of size.
@@ -55,6 +57,16 @@ and whatever is left on the clock is converted into a time bonus.
   and a few seconds of invulnerability before control returns.
 - **Levels** — clearing the flagpole awards a life and moves you to the next
   world, with faster enemies and reinforcements each time.
+
+## Fair spawning
+
+Pipes never drop an enemy into somebody's lap. A spawn is held off while any
+player is within 260px in any direction — so nothing appears beside you while
+you stand still — and, if the pipe is ahead of a moving player, for as far as
+that player will travel in the next three quarters of a second. At a sprint
+that is nearly 600px of clearance, so you never round a corner into a
+freshly-spawned enemy. In multiplayer the same rule applies to every player,
+assuming running speed since remote velocity is not synced.
 
 ## Multiplayer
 
@@ -83,6 +95,36 @@ identity, which is what lets the rules stop one client writing another's score
 or wiping the world. It also leaves room to add Google or email sign-in later:
 an anonymous account can be upgraded in place with `linkWithCredential`, keeping
 the same uid and everything attached to it.
+
+### What the rules enforce
+
+`database.rules.json` must stay comment-free — Firebase parses it as strict
+JSON and reads any `"//"` key as a child path, which is rejected because path
+names cannot contain a slash. The reasoning therefore lives here:
+
+- **`players/$uid`** — you may only write your own node, and every field is
+  shape- and range-checked. `$other: false` rejects any key the game does not
+  write, so a hand-crafted request cannot smuggle extra data into a node that
+  every other client renders.
+- **`coins/$coin`** — a node exists only while that coin is banked. A claim may
+  be written when the coin is free, and cleared by anyone once it respawns, but
+  a live claim cannot be overwritten. That, together with the client-side
+  transaction, is what stops two players banking the same coin.
+- **`enemies`** — shared world state, writable by any signed-in player. Only the
+  elected spawn master actually writes it, but the election is client-side, so
+  the rules cannot express which client that is. Field validation is the
+  available protection here, not authorship.
+- **`hits/$victim`** — a per-player inbox. You read only your own; anyone may
+  post a claim into yours stamped with their own uid, and your client decides
+  whether to accept it. Only you can clear your inbox.
+- **`allTimeLeaderboard`** — publicly readable, because the start screen shows it
+  before anyone signs in. `.indexOn: score` matters: the query sorts by score,
+  and without the index Firebase downloads the whole node and sorts on the
+  client.
+
+Name length is capped at 15 everywhere a name is stored, because names are
+rendered in every other player's leaderboard. The client escapes them too — the
+`maxlength` on the input constrains only people using the form.
 
 ### Spawn master
 
@@ -140,13 +182,16 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 74 checks covering
+Open `tests.html` in a browser to run the test suite — 83 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, level geometry (no overlapping solids, no impassable gaps,
 every tier reachable, every pit jumpable), block and power-up behaviour, and the
 death and respawn sequence, enemy behaviour at ledges, enemy population
-limits, hitbox fidelity against the rendered sprite, and shadow casting,
-alongside DOM and configuration checks.
+limits, fair spawning, hitbox fidelity against the rendered sprite, enemy
+artwork (the turtle's head and neck are scanned for in the rendered frame),
+power-up safety (a loose power-up turns at a ledge, and every power-up block
+has a runway before the next pit), and shadow casting, alongside DOM and
+configuration checks.
 
 Built with:
 
