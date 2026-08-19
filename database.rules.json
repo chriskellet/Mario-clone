@@ -1,0 +1,97 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "players": {
+      ".read": "auth != null",
+
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid",
+        ".validate": "newData.hasChildren(['name', 'x', 'y'])",
+
+        "name": { ".validate": "newData.isString() && newData.val().length <= 15" },
+        "color": { ".validate": "newData.isString() && newData.val().length <= 16" },
+        "score": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "x": { ".validate": "newData.isNumber()" },
+        "y": { ".validate": "newData.isNumber()" },
+        "direction": { ".validate": "newData.isNumber()" },
+        "health": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 2" },
+        "invulnerable": { ".validate": "newData.isBoolean()" },
+        "outOfLives": { ".validate": "newData.isBoolean()" },
+        "timestamp": { ".validate": "newData.val() <= now + 1000" },
+        "joinedAt": { ".validate": "newData.val() <= now + 1000" },
+        "$other": { ".validate": false }
+      }
+    },
+
+    "coins": {
+      ".read": "auth != null",
+
+      "$coin": {
+        ".write": "auth != null && (!data.exists() || !newData.exists() || data.child('collectedBy').val() === auth.uid)",
+        ".validate": "newData.hasChildren(['collected', 'collectedBy'])",
+
+        "collected": { ".validate": "newData.isBoolean()" },
+        "collectedBy": { ".validate": "newData.val() === auth.uid" },
+        "collectedAt": { ".validate": "newData.isNumber()" },
+        "respawnTime": { ".validate": "newData.isNumber()" },
+        "$other": { ".validate": false }
+      }
+    },
+
+    "enemies": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+
+      "$enemy": {
+        ".validate": "!newData.exists() || newData.hasChildren(['x', 'y'])",
+
+        "x": { ".validate": "newData.isNumber()" },
+        "y": { ".validate": "newData.isNumber()" },
+        "velocityX": { ".validate": "newData.isNumber()" },
+        "alive": { ".validate": "newData.isBoolean()" },
+        "type": { ".validate": "newData.isString() && newData.val().length <= 16" },
+        "spawnedBy": { ".validate": "newData.isString() && newData.val().length <= 128" },
+        "spawnedAt": { ".validate": "newData.isNumber()" },
+        "timestamp": { ".validate": "newData.val() <= now + 1000" },
+        "$other": { ".validate": false }
+      }
+    },
+
+    "hits": {
+      "$victim": {
+        ".read": "auth != null && auth.uid === $victim",
+
+        "$hit": {
+          ".write": "auth != null && (!data.exists() || auth.uid === $victim)",
+          ".validate": "!newData.exists() || (newData.hasChildren(['attackerId', 'timestamp']) && newData.child('attackerId').val() === auth.uid)",
+
+          "attackerId": { ".validate": "newData.val() === auth.uid" },
+          "attackerName": { ".validate": "newData.isString() && newData.val().length <= 15" },
+          "attackerX": { ".validate": "newData.isNumber()" },
+          "attackerY": { ".validate": "newData.isNumber()" },
+          "victimX": { ".validate": "newData.isNumber()" },
+          "victimY": { ".validate": "newData.isNumber()" },
+          "timestamp": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        }
+      }
+    },
+
+    "allTimeLeaderboard": {
+      ".read": true,
+      ".write": "auth != null",
+      ".indexOn": "score",
+
+      "$entry": {
+        ".validate": "newData.hasChildren(['name', 'score'])",
+
+        "name": { ".validate": "newData.isString() && newData.val().length <= 15" },
+        "score": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "timestamp": { ".validate": "newData.isNumber()" },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}

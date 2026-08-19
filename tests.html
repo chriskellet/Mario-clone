@@ -1105,6 +1105,148 @@
             assert('serviceWorker' in navigator, 'Service Worker not supported');
         });
 
+        const multiplayerTests = new TestRunner('Multiplayer Coordination');
+
+        // Drives the real election against a synthetic roster. Entries are
+        // { joinedAt, timestamp } in server time, matching what is stored.
+        function electWith(roster, selfId, offset = 0) {
+            const savedMeta = multiplayerState.playerMeta;
+            const savedId = multiplayerState.playerId;
+            const savedOffset = multiplayerState.serverTimeOffset;
+            const savedMaster = multiplayerState.isSpawnMaster;
+
+            multiplayerState.playerMeta = new Map(Object.entries(roster));
+            multiplayerState.playerId = selfId;
+            multiplayerState.serverTimeOffset = offset;
+
+            try {
+                multiplayer.electSpawnMaster();
+                return multiplayerState.isSpawnMaster;
+            } finally {
+                multiplayerState.playerMeta = savedMeta;
+                multiplayerState.playerId = savedId;
+                multiplayerState.serverTimeOffset = savedOffset;
+                multiplayerState.isSpawnMaster = savedMaster;
+            }
+        }
+
+        multiplayerTests.test('Longest-standing active player becomes spawn master', () => {
+            const now = Date.now();
+            const roster = {
+                'uid-zz': { joinedAt: 1000, timestamp: now },
+                'uid-aa': { joinedAt: 2000, timestamp: now },
+                'uid-mm': { joinedAt: 3000, timestamp: now },
+            };
+            assert(electWith(roster, 'uid-zz'), 'Earliest joiner should be master despite the highest uid');
+            assert(!electWith(roster, 'uid-aa'), 'Later joiner should not be master');
+            assert(!electWith(roster, 'uid-mm'), 'Later joiner should not be master');
+        });
+
+        multiplayerTests.test('Exactly one client elects itself master', () => {
+            const now = Date.now();
+            const roster = {
+                'uid-a': { joinedAt: 1000, timestamp: now - 60000 },
+                'uid-b': { joinedAt: 2000, timestamp: now },
+                'uid-c': { joinedAt: 3000, timestamp: now - 200 },
+            };
+            const masters = Object.keys(roster).filter(id => electWith(roster, id));
+            assertEqual(masters.length, 1, `Expected exactly one master, got ${masters.length}`);
+        });
+
+        multiplayerTests.test('Role passes on when the master goes silent', () => {
+            const now = Date.now();
+            const live = {
+                'uid-a': { joinedAt: 1000, timestamp: now },
+                'uid-b': { joinedAt: 2000, timestamp: now },
+            };
+            assert(!electWith(live, 'uid-b'), 'uid-b should defer while uid-a is active');
+
+            // uid-a has not checked in for a minute - a frozen or suspended tab.
+            const stalled = {
+                'uid-a': { joinedAt: 1000, timestamp: now - 60000 },
+                'uid-b': { joinedAt: 2000, timestamp: now },
+            };
+            assert(electWith(stalled, 'uid-b'), 'uid-b should take over from a silent uid-a');
+        });
+
+        multiplayerTests.test('Departed master hands over immediately', () => {
+            const now = Date.now();
+            // onDisconnect drops the node, so the roster simply loses the entry.
+            const roster = {
+                'uid-b': { joinedAt: 2000, timestamp: now },
+                'uid-c': { joinedAt: 3000, timestamp: now },
+            };
+            assert(electWith(roster, 'uid-b'), 'Next-longest-standing player should take over');
+        });
+
+        multiplayerTests.test('A new joiner does not displace a working master', () => {
+            const now = Date.now();
+            const before = { 'uid-zz': { joinedAt: 1000, timestamp: now } };
+            assert(electWith(before, 'uid-zz'), 'Sole player should be master');
+
+            // Somebody joins whose random uid happens to sort first. Ordering
+            // by uid alone would hand them the role and interrupt the world.
+            const after = {
+                'uid-zz': { joinedAt: 1000, timestamp: now },
+                'uid-aa': { joinedAt: 9000, timestamp: now },
+            };
+            assert(electWith(after, 'uid-zz'), 'Incumbent should keep the role');
+            assert(!electWith(after, 'uid-aa'), 'New joiner should not seize the role');
+        });
+
+        multiplayerTests.test('A skewed client clock does not seize the role', () => {
+            const now = Date.now();
+            const roster = {
+                'uid-a': { joinedAt: 1000, timestamp: now },
+                'uid-b': { joinedAt: 2000, timestamp: now },
+            };
+
+            // uid-b's device clock runs five minutes fast. Uncorrected, every
+            // other player looks long-dead to it and it elects itself, giving
+            // the world two spawn masters writing over each other.
+            const skew = 5 * 60 * 1000;
+            const corrected = -skew; // what /.info/serverTimeOffset reports
+            assert(
+                !electWith(roster, 'uid-b', corrected),
+                'uid-b should still defer to uid-a once its clock is corrected'
+            );
+        });
+
+        multiplayerTests.test('An empty roster elects nobody', () => {
+            assert(!electWith({}, 'uid-a'), 'No players means no spawn master');
+        });
+
+        multiplayerTests.test('A roster of only stale players still elects one', () => {
+            const stale = Date.now() - 120000;
+            const roster = {
+                'uid-a': { joinedAt: 1000, timestamp: stale },
+                'uid-b': { joinedAt: 2000, timestamp: stale },
+            };
+            const masters = Object.keys(roster).filter(id => electWith(roster, id));
+            assertEqual(masters.length, 1, 'World should not stall without a master');
+        });
+
+        multiplayerTests.test('Player names are escaped before display', () => {
+            const escaped = escapeHtml('<img src=x onerror=alert(1)>');
+            assert(!escaped.includes('<'), `Raw markup survived escaping: ${escaped}`);
+            assertEqual(escapeHtml('Bob & Sue'), 'Bob &amp; Sue', 'Ampersand should be escaped');
+        });
+
+        multiplayerTests.test('Display names are length-capped', () => {
+            const long = 'x'.repeat(500);
+            assert(
+                escapeHtml(long).length <= MAX_DISPLAY_NAME_LENGTH,
+                'A hand-written database name should not be rendered at full length'
+            );
+        });
+
+        multiplayerTests.test('Coin keys map back to coin objects', () => {
+            if (!coins.length) return; // level not built in this harness
+            const coin = multiplayer.coinFromKey(`coin_${coins[0].index}`);
+            assertEqual(coin, coins[0], 'coin_<index> should resolve to that coin');
+            assertEqual(multiplayer.coinFromKey('coin_notanumber'), null, 'Bad keys should resolve to null');
+        });
+
         // Run all tests
         async function runAllTests() {
             const suites = [
@@ -1127,7 +1269,8 @@
                 populationTests,
                 artTests,
                 powerUpTests,
-                pwaTests
+                pwaTests,
+                multiplayerTests
             ];
 
             const allResults = [];

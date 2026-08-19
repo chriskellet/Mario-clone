@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mario-clone-v3';  // Increment version to force cache update
+const CACHE_NAME = 'mario-clone-v4';  // Increment version to force cache update
 const urlsToCache = [
   '/Mario-clone/',
   '/Mario-clone/index.html',

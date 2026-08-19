@@ -75,6 +75,69 @@ on a live leaderboard, and can stomp each other. Pipes spawn enemies under a
 single elected spawn master so everyone sees the same world. If Firebase is
 blocked or offline the game falls back to single player automatically.
 
+### Firebase setup
+
+Multiplayer needs two things configured on the Firebase project, both under
+[console.firebase.google.com](https://console.firebase.google.com):
+
+1. **Authentication → Sign-in method → Anonymous → enable.** Clients sign in
+   anonymously before connecting, and the database rules key on the resulting
+   `auth.uid`. With the provider disabled, sign-in fails and every client stays
+   in single player.
+2. **Realtime Database → Rules → paste `database.rules.json`** (or
+   `firebase deploy --only database`). The default test-mode rules expire 30
+   days after they are created, after which every read and write is denied and
+   multiplayer silently stops working for everybody.
+
+Anonymous auth is not a gate on who can play — anyone holding the public web
+config can mint a token. It is there so each player has a server-verified
+identity, which is what lets the rules stop one client writing another's score
+or wiping the world. It also leaves room to add Google or email sign-in later:
+an anonymous account can be upgraded in place with `linkWithCredential`, keeping
+the same uid and everything attached to it.
+
+### What the rules enforce
+
+`database.rules.json` must stay comment-free — Firebase parses it as strict
+JSON and reads any `"//"` key as a child path, which is rejected because path
+names cannot contain a slash. The reasoning therefore lives here:
+
+- **`players/$uid`** — you may only write your own node, and every field is
+  shape- and range-checked. `$other: false` rejects any key the game does not
+  write, so a hand-crafted request cannot smuggle extra data into a node that
+  every other client renders.
+- **`coins/$coin`** — a node exists only while that coin is banked. A claim may
+  be written when the coin is free, and cleared by anyone once it respawns, but
+  a live claim cannot be overwritten. That, together with the client-side
+  transaction, is what stops two players banking the same coin.
+- **`enemies`** — shared world state, writable by any signed-in player. Only the
+  elected spawn master actually writes it, but the election is client-side, so
+  the rules cannot express which client that is. Field validation is the
+  available protection here, not authorship.
+- **`hits/$victim`** — a per-player inbox. You read only your own; anyone may
+  post a claim into yours stamped with their own uid, and your client decides
+  whether to accept it. Only you can clear your inbox.
+- **`allTimeLeaderboard`** — publicly readable, because the start screen shows it
+  before anyone signs in. `.indexOn: score` matters: the query sorts by score,
+  and without the index Firebase downloads the whole node and sorts on the
+  client.
+
+Name length is capped at 15 everywhere a name is stored, because names are
+rendered in every other player's leaderboard. The client escapes them too — the
+`maxlength` on the input constrains only people using the form.
+
+### Spawn master
+
+One client is elected to spawn enemies, write their positions and tidy up
+abandoned players. The election is a pure function of the player list that every
+client evaluates independently — no lock node, no election messages, no polling:
+the longest-standing player that has checked in within the last 15 seconds wins.
+Clean departures are instant because `onDisconnect()` removes the player node
+server-side; the activity window is the backstop for a tab that is frozen or on
+a dead network but still nominally connected. Timestamps are compared against
+Firebase's server-corrected clock, so a device with a badly set clock cannot
+decide everyone else is asleep and seize the role.
+
 ## Engine notes
 
 - **Fixed timestep.** The simulation runs at exactly 60Hz through an accumulator

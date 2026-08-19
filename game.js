@@ -110,6 +110,26 @@ const PLAYER_COLORS = [
     { name: 'cyan', shirt: '#00CED1', overalls: '#008B8B', skin: '#FFDBAC' },     // Cyan
 ];
 
+// How many all-time scores are kept and shown. The stored table is trimmed to
+// this on write so it cannot grow without bound.
+const ALL_TIME_LEADERBOARD_SIZE = 10;
+
+// Player names arrive from other clients and land in innerHTML, so they are
+// untrusted markup until proven otherwise. The maxlength on the name input is
+// a nicety for honest players and no defence at all against a hand-written
+// database write.
+const MAX_DISPLAY_NAME_LENGTH = 15;
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .slice(0, MAX_DISPLAY_NAME_LENGTH)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // Multiplayer State
 const multiplayerState = {
     playerId: null,
@@ -126,12 +146,21 @@ const multiplayerState = {
     playerRef: null,
     playersRef: null,
     coinsRef: null,
-    leaderboardRef: null,
     enemiesRef: null,
     portalRef: null,
     hitsRef: null, // For PvP hit messages
     lastProcessedHit: null, // Track last hit to prevent duplicates
     isSpawnMaster: false, // True if this client controls enemy spawning
+    // { timestamp, joinedAt } for every player, ourselves included. The spawn
+    // master election runs off this rather than off a full snapshot of the
+    // players node, so it costs nothing to re-run on every change.
+    playerMeta: new Map(),
+    // Firebase reports how far this device's clock is from the server's. Every
+    // stored timestamp is server time, so comparing it against a raw
+    // Date.now() silently breaks on any device with a skewed clock.
+    serverTimeOffset: 0,
+    lastLeaderboardSignature: '',
+    lastSubmittedAllTimeScore: 0,
     // Track last synced values to avoid redundant updates
     lastSyncedState: {
         x: null,
@@ -160,12 +189,39 @@ class MultiplayerManager {
         }
     }
 
+    // Signs in anonymously and returns the uid, or null if auth is unavailable.
+    //
+    // Anonymous sign-in is not a gate on who can play - anyone can mint a token
+    // from the public config. What it buys is a server-verified identity in
+    // auth.uid, which is what the database rules key on so that a client can
+    // only ever write its own player node. It is also the upgrade path: an
+    // anonymous account can later be linked to Google or email sign-in with
+    // linkWithCredential, keeping the same uid and everything attached to it.
+    async signIn() {
+        if (typeof firebase === 'undefined' || !firebase.auth) {
+            console.warn('Firebase Auth SDK not loaded - multiplayer disabled');
+            return null;
+        }
+
+        try {
+            const credential = await firebase.auth().signInAnonymously();
+            return credential.user.uid;
+        } catch (err) {
+            // The most likely cause is the Anonymous provider being switched
+            // off in the Firebase console.
+            console.warn('Anonymous sign-in failed, running in single player:', err);
+            return null;
+        }
+    }
+
     async connect(playerName) {
         if (!this.db) return false;
 
         try {
-            // Generate unique player ID
-            multiplayerState.playerId = this.db.ref().child('players').push().key;
+            const uid = await this.signIn();
+            if (!uid) return false;
+
+            multiplayerState.playerId = uid;
             multiplayerState.playerName = playerName || 'Anonymous';
 
             // Assign color based on player ID hash
@@ -176,7 +232,6 @@ class MultiplayerManager {
             multiplayerState.playersRef = this.db.ref('players');
             multiplayerState.playerRef = multiplayerState.playersRef.child(multiplayerState.playerId);
             multiplayerState.coinsRef = this.db.ref('coins');
-            multiplayerState.leaderboardRef = this.db.ref('leaderboard');
             multiplayerState.enemiesRef = this.db.ref('enemies');
             multiplayerState.portalRef = this.db.ref('portals');
             multiplayerState.hitsRef = this.db.ref('hits');
@@ -191,10 +246,18 @@ class MultiplayerManager {
                 direction: 1,
                 health: 2, // Start with 2 health (big Mario)
                 timestamp: firebase.database.ServerValue.TIMESTAMP,
+                // Fixed for the lifetime of the session and used to order the
+                // spawn master election, so the role stays with the
+                // longest-standing player instead of shuffling on every join.
+                joinedAt: firebase.database.ServerValue.TIMESTAMP,
             });
 
-            // Set up disconnect cleanup
+            this.trackServerTimeOffset();
+
+            // Set up disconnect cleanup. Our inbox goes with us, otherwise any
+            // hit still in flight when we close the tab is orphaned forever.
             multiplayerState.playerRef.onDisconnect().remove();
+            multiplayerState.hitsRef.child(multiplayerState.playerId).onDisconnect().remove();
 
             // Listen for other players
             this.listenForPlayers();
@@ -232,114 +295,166 @@ class MultiplayerManager {
         return hash;
     }
 
-    listenForPlayers() {
-        multiplayerState.playersRef.on('value', (snapshot) => {
-            const players = snapshot.val();
-            if (!players) return;
+    // Tracks how far this device's clock is from the server's, which keeps the
+    // spawn master election honest on devices whose clocks are minutes out.
+    // This is a local SDK value maintained off the existing connection, not a
+    // billed read. Subscribed once per page rather than once per connect, so
+    // that quitting to the menu and starting again does not stack handlers.
+    trackServerTimeOffset() {
+        if (this.trackingServerTime || !this.db) return;
+        this.trackingServerTime = true;
 
-            Object.entries(players).forEach(([id, data]) => {
-                if (id !== multiplayerState.playerId) {
-                    const existingPlayer = multiplayerState.remotePlayers.get(id);
-
-                    if (existingPlayer) {
-                        // Update target position for interpolation
-                        existingPlayer.targetX = data.x || 0;
-                        existingPlayer.targetY = data.y || 0;
-                        existingPlayer.direction = data.direction || 1;
-                        existingPlayer.score = data.score || 0;
-                        existingPlayer.health = data.health || 2;
-                        existingPlayer.invulnerable = data.invulnerable || false;
-                        existingPlayer.outOfLives = data.outOfLives || false;
-                        existingPlayer.timestamp = data.timestamp || Date.now();
-                    } else {
-                        // New player - initialize with current position
-                        multiplayerState.remotePlayers.set(id, {
-                            name: data.name || 'Unknown Player',
-                            color: PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0],
-                            x: data.x || 0,
-                            y: data.y || 0,
-                            targetX: data.x || 0,
-                            targetY: data.y || 0,
-                            direction: data.direction || 1,
-                            score: data.score || 0,
-                            health: data.health || 2,
-                            invulnerable: data.invulnerable || false,
-                            outOfLives: data.outOfLives || false,
-                            timestamp: data.timestamp || Date.now(),
-                        });
-                    }
-                }
-            });
-
-            // Remove disconnected players
-            const playerIds = new Set(Object.keys(players));
-            for (const [id] of multiplayerState.remotePlayers) {
-                if (!playerIds.has(id)) {
-                    multiplayerState.remotePlayers.delete(id);
-                }
-            }
-
-            // Determine spawn master with AFK detection
-            // Normally: player with lowest ID alphabetically
-            // BUT: if that player is AFK (no updates for 15+ seconds), active players can claim the role
-            const allPlayerIds = Array.from(playerIds).sort();
-            const nominalSpawnMasterId = allPlayerIds[0];
-            const nominalSpawnMaster = players[nominalSpawnMasterId];
-            const now = Date.now();
-            const spawnMasterInactivityThreshold = 15000; // 15 seconds
-
-            // Check if the nominal Spawn Master is inactive
-            const spawnMasterLastUpdate = nominalSpawnMaster?.timestamp || 0;
-            const spawnMasterInactive = (now - spawnMasterLastUpdate) > spawnMasterInactivityThreshold;
-
-            let actualSpawnMasterId;
-            if (spawnMasterInactive) {
-                // Nominal Spawn Master is AFK/abandoned - find the most recently active player to take over
-                // This ensures an active player becomes Spawn Master, not another AFK player
-                let mostRecentPlayerId = nominalSpawnMasterId;
-                let mostRecentTimestamp = 0;
-
-                for (const [id, data] of Object.entries(players)) {
-                    const timestamp = data.timestamp || 0;
-                    if (timestamp > mostRecentTimestamp) {
-                        mostRecentTimestamp = timestamp;
-                        mostRecentPlayerId = id;
-                    }
-                }
-                actualSpawnMasterId = mostRecentPlayerId;
-            } else {
-                // Nominal Spawn Master is active - use them
-                actualSpawnMasterId = nominalSpawnMasterId;
-            }
-
-            const wasSpawnMaster = multiplayerState.isSpawnMaster;
-            multiplayerState.isSpawnMaster = (actualSpawnMasterId === multiplayerState.playerId);
-
-            // Log spawn master changes
-            if (multiplayerState.isSpawnMaster && !wasSpawnMaster) {
-                if (spawnMasterInactive && nominalSpawnMasterId !== multiplayerState.playerId) {
-                    console.log('🎮 Previous spawn master is AFK - you are now the spawn master (controlling enemy spawns and cleanup)');
-                } else {
-                    console.log('🎮 You are now the spawn master - controlling enemy spawns and cleanup');
-                }
-            } else if (!multiplayerState.isSpawnMaster && wasSpawnMaster) {
-                console.log('🎮 Spawn master role transferred to another player');
-            }
-
-            // Spawn master cleans up inactive players
-            if (multiplayerState.isSpawnMaster) {
-                this.cleanupInactivePlayers(players);
-            }
-
-            // Update leaderboard display
-            this.updateLeaderboardUI();
+        this.db.ref('.info/serverTimeOffset').on('value', (snap) => {
+            multiplayerState.serverTimeOffset = snap.val() || 0;
         });
     }
 
-    async cleanupInactivePlayers(players) {
+    // Server-corrected wall clock. Every timestamp in the database is written
+    // with ServerValue.TIMESTAMP, so this is the only sound thing to compare
+    // them against.
+    serverNow() {
+        return Date.now() + multiplayerState.serverTimeOffset;
+    }
+
+    listenForPlayers() {
+        const ref = multiplayerState.playersRef;
+
+        // Child-level listeners, not a 'value' listener on the whole node. A
+        // 'value' listener re-sends every player to every client on every
+        // single position update - O(players^2) bandwidth carrying one
+        // player's worth of new information.
+        ref.on('child_added', (snapshot) => {
+            this.applyPlayerSnapshot(snapshot.key, snapshot.val());
+            this.onPlayersChanged();
+        });
+
+        ref.on('child_changed', (snapshot) => {
+            this.applyPlayerSnapshot(snapshot.key, snapshot.val());
+            this.onPlayersChanged();
+        });
+
+        ref.on('child_removed', (snapshot) => {
+            multiplayerState.remotePlayers.delete(snapshot.key);
+            multiplayerState.playerMeta.delete(snapshot.key);
+            this.onPlayersChanged();
+        });
+    }
+
+    applyPlayerSnapshot(id, data) {
+        if (!data) return;
+
+        // Tracked for every player including ourselves - the election needs to
+        // know whether we are still a live candidate too.
+        multiplayerState.playerMeta.set(id, {
+            timestamp: data.timestamp || 0,
+            joinedAt: data.joinedAt || 0,
+        });
+
+        if (id === multiplayerState.playerId) return;
+
+        const existingPlayer = multiplayerState.remotePlayers.get(id);
+
+        if (existingPlayer) {
+            // Update target position for interpolation
+            existingPlayer.targetX = data.x || 0;
+            existingPlayer.targetY = data.y || 0;
+            existingPlayer.direction = data.direction || 1;
+            existingPlayer.score = data.score || 0;
+            existingPlayer.health = data.health || 2;
+            existingPlayer.invulnerable = data.invulnerable || false;
+            existingPlayer.outOfLives = data.outOfLives || false;
+            existingPlayer.timestamp = data.timestamp || this.serverNow();
+        } else {
+            // New player - initialize with current position
+            multiplayerState.remotePlayers.set(id, {
+                name: data.name || 'Unknown Player',
+                color: PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0],
+                x: data.x || 0,
+                y: data.y || 0,
+                targetX: data.x || 0,
+                targetY: data.y || 0,
+                direction: data.direction || 1,
+                score: data.score || 0,
+                health: data.health || 2,
+                invulnerable: data.invulnerable || false,
+                outOfLives: data.outOfLives || false,
+                timestamp: data.timestamp || this.serverNow(),
+            });
+        }
+    }
+
+    onPlayersChanged() {
+        this.electSpawnMaster();
+
+        if (multiplayerState.isSpawnMaster) {
+            this.cleanupInactivePlayers();
+        }
+
+        this.updateLeaderboardUI();
+    }
+
+    // Elects the client responsible for spawning enemies and tidying up.
+    //
+    // This is a pure function of state every client already has, so it needs no
+    // election messages, no lock node and no timers: each client independently
+    // reaches the same answer and re-derives it whenever the roster changes.
+    // Departures are usually instant anyway, because onDisconnect() removes a
+    // player server-side the moment their socket drops; the activity window
+    // below is the backstop for the case that does not cover - a tab that is
+    // frozen, suspended or on a dead network but still nominally connected.
+    //
+    // Two properties matter more than they look:
+    //
+    //   - "longest-standing active player" rather than "most recently active".
+    //     The latter changes answer on every heartbeat and depends on message
+    //     arrival order, so two clients holding slightly different snapshots
+    //     elect different masters - and two spawn masters means double spawns
+    //     and double writes. Ordering by join time also means a new arrival
+    //     never displaces a working master, which sorting by the random auth
+    //     uid alone would do roughly half the time.
+    //   - Timestamps are compared against server-corrected time. Stored
+    //     timestamps are server-side; a device whose clock is a minute fast
+    //     would otherwise consider every other player AFK and seize the role.
+    electSpawnMaster() {
+        const now = this.serverNow();
+        const activityWindow = 15000; // 15 seconds
+
+        // Earliest joiner first, uid as a stable tie-break for the case where
+        // two players' join timestamps land on the same millisecond.
+        const ids = Array.from(multiplayerState.playerMeta.keys()).sort((a, b) => {
+            const joinedA = multiplayerState.playerMeta.get(a).joinedAt || 0;
+            const joinedB = multiplayerState.playerMeta.get(b).joinedAt || 0;
+            return joinedA === joinedB ? a.localeCompare(b) : joinedA - joinedB;
+        });
+
+        if (!ids.length) {
+            multiplayerState.isSpawnMaster = false;
+            return;
+        }
+
+        const active = ids.filter(id =>
+            (now - (multiplayerState.playerMeta.get(id).timestamp || 0)) <= activityWindow
+        );
+
+        // If nobody looks active we have most likely just joined and have not
+        // seen a heartbeat yet - fall back to the full roster so the world
+        // still gets a master rather than stalling.
+        const masterId = (active.length ? active : ids)[0];
+
+        const wasSpawnMaster = multiplayerState.isSpawnMaster;
+        multiplayerState.isSpawnMaster = (masterId === multiplayerState.playerId);
+
+        if (multiplayerState.isSpawnMaster && !wasSpawnMaster) {
+            console.log('🎮 You are now the spawn master - controlling enemy spawns and cleanup');
+        } else if (!multiplayerState.isSpawnMaster && wasSpawnMaster) {
+            console.log('🎮 Spawn master role transferred to another player');
+        }
+    }
+
+    async cleanupInactivePlayers() {
         if (!multiplayerState.isSpawnMaster) return;
 
-        const now = Date.now();
+        const now = this.serverNow();
 
         // Throttle cleanup - only run every 30 seconds
         if (now - multiplayerState.lastCleanupTime < multiplayerState.cleanupInterval) {
@@ -349,23 +464,23 @@ class MultiplayerManager {
         multiplayerState.lastCleanupTime = now;
         const inactivityThreshold = 10000; // 10 seconds of inactivity (reduced from 60s to handle abandoned players faster)
 
-        for (const [playerId, playerData] of Object.entries(players)) {
+        for (const [playerId, meta] of multiplayerState.playerMeta) {
             // Skip our own player
             if (playerId === multiplayerState.playerId) continue;
 
-            const lastUpdate = playerData.timestamp || 0;
-            const timeSinceUpdate = now - lastUpdate;
+            const timeSinceUpdate = now - (meta.timestamp || 0);
 
             // If player hasn't updated in 10 seconds, remove them
             if (timeSinceUpdate > inactivityThreshold) {
-                console.log(`🧹 Cleaning up inactive player: ${playerData.name} (inactive for ${Math.round(timeSinceUpdate / 1000)}s)`);
+                const name = multiplayerState.remotePlayers.get(playerId)?.name || playerId;
+                console.log(`🧹 Cleaning up inactive player: ${name} (inactive for ${Math.round(timeSinceUpdate / 1000)}s)`);
 
                 try {
-                    // Remove player from players list
+                    // Remove player from players list, along with any hit
+                    // claims still sitting in their inbox - nothing will ever
+                    // read those once the player is gone.
                     await multiplayerState.playersRef.child(playerId).remove();
-
-                    // Remove player from leaderboard
-                    await multiplayerState.leaderboardRef.child(playerId).remove();
+                    await multiplayerState.hitsRef.child(playerId).remove();
                 } catch (error) {
                     console.error('Failed to cleanup inactive player:', error);
                 }
@@ -373,19 +488,35 @@ class MultiplayerManager {
         }
     }
 
-    listenForCoins() {
-        multiplayerState.coinsRef.on('value', (snapshot) => {
-            const coinData = snapshot.val();
-            if (!coinData) return;
+    coinFromKey(key) {
+        const index = Number.parseInt(String(key).replace('coin_', ''), 10);
+        if (!Number.isInteger(index)) return null;
+        return coins.find(c => c.index === index) || null;
+    }
 
-            // Update coin collected states
-            coins.forEach((coin, index) => {
-                const coinKey = `coin_${index}`;
-                if (coinData[coinKey]) {
-                    coin.collected = true;
-                    coin.respawnTime = coinData[coinKey].respawnTime;
-                }
-            });
+    listenForCoins() {
+        // Per-coin listeners rather than a 'value' listener on the whole node:
+        // one player banking one coin used to re-send the state of every coin
+        // in the level to every player.
+        const claim = (snapshot) => {
+            const coin = this.coinFromKey(snapshot.key);
+            if (!coin) return;
+            coin.collected = true;
+            coin.respawnTime = (snapshot.val() || {}).respawnTime;
+        };
+
+        multiplayerState.coinsRef.on('child_added', claim);
+        multiplayerState.coinsRef.on('child_changed', claim);
+
+        // A collected coin is represented by the node existing, so removal is
+        // the respawn signal. The old 'value' handler could only ever set
+        // collected = true, which meant respawned coins stayed invisible to
+        // everyone except the client that removed the node.
+        multiplayerState.coinsRef.on('child_removed', (snapshot) => {
+            const coin = this.coinFromKey(snapshot.key);
+            if (!coin) return;
+            coin.collected = false;
+            coin.respawnTime = null;
         });
     }
 
@@ -693,25 +824,28 @@ class MultiplayerManager {
         }
     }
 
-    async updateLeaderboard() {
-        if (!multiplayerState.connected) return;
-
-        try {
-            await multiplayerState.leaderboardRef.child(multiplayerState.playerId).set({
-                name: multiplayerState.playerName,
-                score: gameState.score,
-                timestamp: firebase.database.ServerValue.TIMESTAMP,
-            });
-
-            // Update all-time leaderboard if score is high enough
-            this.updateAllTimeLeaderboard(multiplayerState.playerName, gameState.score);
-        } catch (error) {
-            console.error('Failed to update leaderboard:', error);
-        }
+    // Called whenever our score changes. Deliberately does no network I/O: our
+    // score already rides along on the throttled, dirty-checked player sync,
+    // so there is nothing here worth a write of its own. It used to write a
+    // dedicated /leaderboard node that nothing ever read, plus a full
+    // transaction over the all-time table, on every single coin.
+    updateLeaderboard() {
+        this.updateLeaderboardUI();
     }
 
-    async updateAllTimeLeaderboard(playerName, score) {
+    // Persists a finished run to the all-time table. Call this at the end of a
+    // run, not on every score change - it is a read-modify-write over the whole
+    // node and is by far the most expensive operation in the game.
+    async submitAllTimeScore() {
         if (!this.db) return;
+        if (!multiplayerState.playerName || gameState.score <= 0) return;
+
+        const playerName = multiplayerState.playerName;
+        const score = gameState.score;
+
+        // Nothing to do if we have not beaten our own submitted best.
+        if (score <= multiplayerState.lastSubmittedAllTimeScore) return;
+        multiplayerState.lastSubmittedAllTimeScore = score;
 
         try {
             const allTimeRef = this.db.ref('allTimeLeaderboard');
@@ -743,7 +877,15 @@ class MultiplayerManager {
                     };
                 }
 
-                return currentData;
+                // Only the top scores are ever displayed, so only the top
+                // scores are worth storing. Without this the node grows by one
+                // entry per new name forever, and every transaction above has
+                // to read and rewrite all of it.
+                const ranked = Object.entries(currentData)
+                    .sort(([, a], [, b]) => (b.score || 0) - (a.score || 0))
+                    .slice(0, ALL_TIME_LEADERBOARD_SIZE);
+
+                return Object.fromEntries(ranked);
             });
         } catch (error) {
             console.error('Failed to update all-time leaderboard:', error);
@@ -754,7 +896,7 @@ class MultiplayerManager {
         if (!this.db) return;
 
         const allTimeRef = this.db.ref('allTimeLeaderboard');
-        allTimeRef.orderByChild('score').limitToLast(10).on('value', (snapshot) => {
+        allTimeRef.orderByChild('score').limitToLast(ALL_TIME_LEADERBOARD_SIZE).on('value', (snapshot) => {
             const allTimeList = document.getElementById('all-time-list');
             const panel = document.getElementById('all-time-leaderboard');
             if (!allTimeList) return;
@@ -768,14 +910,16 @@ class MultiplayerManager {
             }
 
             // Convert to array and sort by score descending
-            const entries = Object.values(data).sort((a, b) => b.score - a.score).slice(0, 10);
+            const entries = Object.values(data)
+                .sort((a, b) => b.score - a.score)
+                .slice(0, ALL_TIME_LEADERBOARD_SIZE);
 
             // Render top 10
             allTimeList.innerHTML = entries.map((entry, index) => `
                 <div class="all-time-entry">
                     <span class="rank">${this.getRankEmoji(index + 1)}</span>
-                    <span class="name">${entry.name}</span>
-                    <span class="score">${entry.score}</span>
+                    <span class="name">${escapeHtml(entry.name)}</span>
+                    <span class="score">${Number(entry.score) || 0}</span>
                 </div>
             `).join('');
         });
@@ -812,23 +956,30 @@ class MultiplayerManager {
         // Take top 5
         const top5 = allPlayers.slice(0, 5);
 
-        // Render leaderboard
-        leaderboardList.innerHTML = top5.map((player, index) => `
-            <div class="leaderboard-entry ${player.isYou ? 'you' : ''}">
-                <span class="rank">#${index + 1}</span>
-                <span class="name">${player.name}${player.isYou ? ' (You)' : ''}</span>
-                <span class="score">${player.score}</span>
-            </div>
-        `).join('');
-
         // Show leaderboard if we have players
         const leaderboard = document.getElementById('leaderboard');
         if (leaderboard && allPlayers.length > 0) {
             leaderboard.classList.remove('hidden');
         }
+
+        // Position updates arrive several times a second per player, but the
+        // board only changes when a name, score or the ordering does. Skip the
+        // innerHTML rebuild otherwise.
+        const signature = top5.map(p => `${p.id}:${p.name}:${p.score}`).join('|');
+        if (signature === multiplayerState.lastLeaderboardSignature) return;
+        multiplayerState.lastLeaderboardSignature = signature;
+
+        // Render leaderboard
+        leaderboardList.innerHTML = top5.map((player, index) => `
+            <div class="leaderboard-entry ${player.isYou ? 'you' : ''}">
+                <span class="rank">#${index + 1}</span>
+                <span class="name">${escapeHtml(player.name)}${player.isYou ? ' (You)' : ''}</span>
+                <span class="score">${Number(player.score) || 0}</span>
+            </div>
+        `).join('');
     }
 
-    async respawnPlayer() {
+    respawnPlayer() {
         if (!multiplayerState.connected) return;
 
         // Apply 20% score penalty
@@ -836,8 +987,8 @@ class MultiplayerManager {
         gameState.score = Math.max(0, gameState.score - penalty);
         document.getElementById('score').textContent = gameState.score;
 
-        // Update Firebase
-        await this.updateLeaderboard();
+        // The new score reaches other players on the next player sync.
+        this.updateLeaderboard();
 
         console.log(`Respawned with ${penalty} point penalty`);
     }
@@ -852,6 +1003,20 @@ class MultiplayerManager {
         if (multiplayerState.coinsRef) {
             multiplayerState.coinsRef.off();
         }
+        // These were left subscribed on the old teardown path, so a game over
+        // followed by a new game stacked a second set of handlers on top of the
+        // first - every enemy update then applied twice.
+        if (multiplayerState.enemiesRef) {
+            multiplayerState.enemiesRef.off();
+        }
+        if (multiplayerState.hitsRef && multiplayerState.playerId) {
+            multiplayerState.hitsRef.child(multiplayerState.playerId).off();
+            multiplayerState.hitsRef.child(multiplayerState.playerId).remove();
+        }
+        multiplayerState.playerMeta.clear();
+        multiplayerState.remotePlayers.clear();
+        multiplayerState.lastLeaderboardSignature = '';
+        multiplayerState.isSpawnMaster = false;
         multiplayerState.connected = false;
     }
 }
@@ -2010,6 +2175,7 @@ class Player {
                 this.y = this.deathY;
                 this.outOfLives = true;
                 multiplayer.syncPlayerPosition(this.x, this.y, this.direction, this.health, this.invulnerable, this.outOfLives);
+                multiplayer.submitAllTimeScore();
                 showOutOfLivesScreen();
             } else {
                 gameOver();
@@ -2507,8 +2673,11 @@ class Enemy {
 
         if (this.alive) this.handlePlayerCollision();
 
-        // Sync enemy position to Firebase (throttled)
-        if (this.alive && multiplayerState.connected && this.id) {
+        // Sync enemy position to Firebase (throttled). Only the spawn master
+        // writes: enemies are simulated identically on every client, so having
+        // all of them write the same node multiplied the traffic by the player
+        // count and had them fighting over whose physics step won.
+        if (this.alive && multiplayerState.connected && multiplayerState.isSpawnMaster && this.id) {
             multiplayer.syncEnemyState(this);
         }
     }
@@ -5002,6 +5171,9 @@ function gameOver() {
     if (finalLevel) finalLevel.textContent = gameState.level;
 
     setScreenVisible('game-over-screen', true);
+
+    // Bank the run before tearing the connection down.
+    multiplayer.submitAllTimeScore();
 
     // Disconnect from multiplayer
     if (multiplayerState.connected) {
