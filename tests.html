@@ -426,7 +426,353 @@
             assert(powerUps.length === before + 1, 'no power-up appeared');
         });
 
-        // Test Suite 11: PWA
+        // Test Suite 11: Level geometry
+        // Hand-placed levels drift into 20 and 30px slots that look like
+        // openings but are too tight to walk into. These checks keep the
+        // layout honest: everything sits on the grid, and every gap is either
+        // genuinely passable or genuinely solid.
+        const geometryTests = new TestRunner('Level Geometry');
+
+        function levelSolids() {
+            initLevel();
+            rebuildSolids();
+            return solidCache.slice();
+        }
+
+        const describe = s => `${s.variant || s.type || 'pipe'}@(${Math.round(s.x)},${Math.round(s.y)})`;
+
+        geometryTests.test('no two solids occupy the same space', () => {
+            const solids = levelSolids();
+            const clashes = [];
+            for (let i = 0; i < solids.length; i++) {
+                for (let j = i + 1; j < solids.length; j++) {
+                    if (overlaps(solids[i], solids[j])) {
+                        clashes.push(`${describe(solids[i])} / ${describe(solids[j])}`);
+                    }
+                }
+            }
+            assert(clashes.length === 0, `overlapping solids: ${clashes.slice(0, 3).join(', ')}`);
+        });
+
+        geometryTests.test('no gap is too narrow to walk into', () => {
+            const solids = levelSolids();
+            const width = CONFIG.PLAYER_SIZE;
+            const bad = [];
+            for (let i = 0; i < solids.length; i++) {
+                for (let j = i + 1; j < solids.length; j++) {
+                    const a = solids[i], b = solids[j];
+                    if (!(a.y < b.y + b.height && a.y + a.height > b.y)) continue;
+                    const left = a.x < b.x ? a : b;
+                    const right = a.x < b.x ? b : a;
+                    const gap = right.x - (left.x + left.width);
+                    if (gap <= 0 || gap >= width) continue;
+                    const y0 = Math.max(a.y, b.y), y1 = Math.min(a.y + a.height, b.y + b.height);
+                    const filled = solids.some(s => s !== a && s !== b &&
+                        s.x < right.x && s.x + s.width > left.x + left.width &&
+                        s.y < y1 && s.y + s.height > y0);
+                    if (!filled) bad.push(`${Math.round(gap)}px at ${describe(left)}`);
+                }
+            }
+            assert(bad.length === 0, `unwalkable slots: ${bad.slice(0, 3).join(', ')}`);
+        });
+
+        geometryTests.test('no tunnel is too short to fit under', () => {
+            const solids = levelSolids();
+            const height = CONFIG.PLAYER_SIZE;
+            const bad = [];
+            for (let i = 0; i < solids.length; i++) {
+                for (let j = i + 1; j < solids.length; j++) {
+                    const a = solids[i], b = solids[j];
+                    if (!(a.x < b.x + b.width && a.x + a.width > b.x)) continue;
+                    const top = a.y < b.y ? a : b;
+                    const bottom = a.y < b.y ? b : a;
+                    const gap = bottom.y - (top.y + top.height);
+                    if (gap <= 0 || gap >= height) continue;
+                    const x0 = Math.max(a.x, b.x), x1 = Math.min(a.x + a.width, b.x + b.width);
+                    const filled = solids.some(s => s !== a && s !== b &&
+                        s.x < x1 && s.x + s.width > x0 &&
+                        s.y < bottom.y && s.y + s.height > top.y + top.height);
+                    if (!filled) bad.push(`${Math.round(gap)}px under ${describe(top)}`);
+                }
+            }
+            assert(bad.length === 0, `crawlspaces: ${bad.slice(0, 3).join(', ')}`);
+        });
+
+        geometryTests.test('every exposed surface has somewhere to stand', () => {
+            const solids = levelSolids();
+            const size = CONFIG.PLAYER_SIZE;
+            const bad = [];
+            for (const surface of solids) {
+                if (surface.y > CONFIG.WORLD_HEIGHT || surface.width < 8) continue;
+                // A block buried under the next stair has no exposed top.
+                const buried = solids.some(s => s !== surface &&
+                    s.x <= surface.x && s.x + s.width >= surface.x + surface.width &&
+                    Math.abs(s.y + s.height - surface.y) < 1);
+                if (buried) continue;
+
+                let free = 0;
+                for (let bx = surface.x - size + 4; bx <= surface.x + surface.width - 4; bx += 4) {
+                    if (bx + size <= surface.x || bx >= surface.x + surface.width) continue;
+                    const body = { x: bx, y: surface.y - size, width: size, height: size };
+                    if (!solids.some(s => s !== surface && overlaps(body, s))) free++;
+                }
+                if (free === 0) bad.push(describe(surface));
+            }
+            assert(bad.length === 0, `nowhere to stand on: ${bad.slice(0, 3).join(', ')}`);
+        });
+
+        geometryTests.test('the layout sits on the grid', () => {
+            initLevel();
+            const offGrid = [...platforms, ...blocks]
+                .filter(s => s.variant !== 'cloud')
+                .filter(s => s.x % GRID !== 0 || s.width % GRID !== 0)
+                .map(describe);
+            assert(offGrid.length === 0, `off-grid: ${offGrid.slice(0, 3).join(', ')}`);
+        });
+
+        geometryTests.test('each tier is within one jump of the one below', () => {
+            initLevel();
+            // Measured jump height is ~158px; keep a margin so the level is
+            // never gated behind a pixel-perfect running jump.
+            const rise = 158;
+            const heights = [TIER.ground, TIER.low, TIER.mid, TIER.high];
+            for (let i = 1; i < heights.length; i++) {
+                const climb = heights[i - 1] - heights[i];
+                assert(climb < rise - 20, `tier ${i} needs a ${climb}px climb, jump clears ${rise}px`);
+            }
+        });
+
+        geometryTests.test('every pit is jumpable', () => {
+            initLevel();
+            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+            // A running jump hangs for roughly 50 frames at 7.2px/frame.
+            const reach = 50 * CONFIG.RUN_SPEED * 0.75;
+            for (let i = 1; i < ground.length; i++) {
+                const gap = ground[i].x - (ground[i - 1].x + ground[i - 1].width);
+                assert(gap > 0, 'ground segments should not touch');
+                assert(gap < reach, `a ${gap}px pit is wider than a ${Math.round(reach)}px jump`);
+            }
+        });
+
+        // Test Suite 12: Death and respawn
+        const deathTests = new TestRunner('Death and Respawn');
+
+        deathTests.test('a lethal hit starts a death sequence instead of teleporting', () => {
+            initLevel();
+            const spot = { x: player.x, y: player.y };
+            player.health = 1;
+            player.setInvulnerable(false);
+            player.hit();
+            assert(player.dying, 'player should be dying');
+            assertEqual(Math.round(player.x), Math.round(spot.x), 'player should not move on the hit frame');
+        });
+
+        deathTests.test('the death animation holds still before falling away', () => {
+            initLevel();
+            player.health = 1;
+            player.setInvulnerable(false);
+            const startY = player.y;
+            player.hit();
+            for (let i = 0; i < CONFIG.DEATH_FREEZE - 1; i++) player.updateDeath();
+            assertEqual(Math.round(player.y), Math.round(startY), 'body should hang still at first');
+            for (let i = 0; i < 12; i++) player.updateDeath();
+            assert(player.y < startY, 'body should pop upward after the pause');
+        });
+
+        deathTests.test('respawn only happens once the sequence finishes', () => {
+            initLevel();
+            gameState.lives = 3;
+            player.health = 1;
+            player.setInvulnerable(false);
+            player.hit();
+            assertEqual(gameState.lives, 2, 'a life is spent immediately');
+            let guard = 0;
+            while (player.dying && guard++ < 400) player.updateDeath();
+            assert(!player.dying, 'death sequence should end');
+            assert(player.health === 2, 'player returns at full size');
+            assert(player.controlLock > 0, 'player gets a moment before control returns');
+            assert(player.invulnerable, 'player returns briefly invulnerable');
+        });
+
+        deathTests.test('single player respawns on the last solid footing', () => {
+            initLevel();
+            gameState.lives = 3;
+            // Walk the player onto a known patch of ground and let it register.
+            const seg = platforms.filter(p => p.variant === 'ground')[1];
+            player.x = seg.x + 200;
+            player.y = seg.y - player.height;
+            player.recordSafeGround(seg);
+
+            player.health = 1;
+            player.setInvulnerable(false);
+            player.hit();
+            let guard = 0;
+            while (player.dying && guard++ < 400) player.updateDeath();
+
+            assertEqual(Math.round(player.x), Math.round(seg.x + 200), 'respawn should return to the checkpoint');
+            assertEqual(Math.round(player.y + player.height), Math.round(seg.y), 'respawn should be on the ground');
+        });
+
+        deathTests.test('a ledge edge is never used as a checkpoint', () => {
+            initLevel();
+            const seg = platforms.filter(p => p.variant === 'ground')[0];
+            player.safeGround = null;
+            player.x = seg.x + seg.width - player.width;   // right on the lip of the pit
+            player.y = seg.y - player.height;
+            player.recordSafeGround(seg);
+            assert(!player.safeGround, 'the very edge of a ledge should not be a checkpoint');
+        });
+
+        deathTests.test('the death beat lasts long enough to register', () => {
+            // Roughly a second and a half: long enough to see what happened.
+            const frames = CONFIG.DEATH_FREEZE + CONFIG.DEATH_FALL;
+            assert(frames >= 90, `death lasts only ${frames} frames`);
+            assert(CONFIG.RESPAWN_READY >= 30, 'respawn grace is too short to be noticed');
+        });
+
+        // Test Suite 13: Collision courtesies
+        const courtesyTests = new TestRunner('Collision Courtesies');
+
+        courtesyTests.test('clipping a block corner slides past instead of stopping the jump', () => {
+            const block = { x: 100, y: 0, width: 40, height: 40, oneWay: false };
+            // Rising with only 6px of the body caught under the block's edge
+            const body = { x: 66, y: 44, width: 40, height: 40, velocityX: 0, velocityY: -12, onGround: false };
+            const hit = moveAndCollide(body, { solids: [block], cornerCorrection: CONFIG.CORNER_CORRECTION });
+            assert(!hit.ceiling, 'a clipped corner should not count as a head-butt');
+            assert(body.y < 44, 'the jump should keep rising');
+            assert(body.x + body.width <= block.x + 0.5,
+                `the body should be nudged clear of the block (right edge ${Math.round(body.x + body.width)})`);
+        });
+
+        courtesyTests.test('a square hit on a block still counts as a head-butt', () => {
+            const block = { x: 100, y: 0, width: 40, height: 40, oneWay: false };
+            const body = { x: 110, y: 44, width: 40, height: 40, velocityX: 0, velocityY: -12, onGround: false };
+            const hit = moveAndCollide(body, { solids: [block], cornerCorrection: CONFIG.CORNER_CORRECTION });
+            assert(hit.ceiling === block, 'a solid hit should report the ceiling');
+            assertEqual(body.y, 40, 'the body should stop below the block');
+        });
+
+        courtesyTests.test('resolution pushes clear of every solid it touches', () => {
+            // Two blocks side by side: stopping at the first used to leave the
+            // body still embedded in the second.
+            const a = { x: 100, y: 100, width: 40, height: 40, oneWay: false };
+            const b = { x: 140, y: 100, width: 40, height: 40, oneWay: false };
+            const body = { x: 60, y: 100, width: 40, height: 40, velocityX: 0, velocityY: 0, onGround: false };
+            for (let i = 0; i < 30; i++) { body.velocityX = 6; moveAndCollide(body, { solids: [a, b] }); }
+            assert(!overlaps(body, a) && !overlaps(body, b), 'body ended up inside a solid');
+            assertEqual(Math.round(body.x + body.width), 100, 'body should rest against the first block');
+        });
+
+        // Test Suite 14: Enemy behaviour at edges
+        const edgeTests = new TestRunner('Enemies at Edges');
+
+        edgeTests.test('a walking turtle stops at a ledge', () => {
+            initLevel();
+            const seg = platforms.filter(p => p.variant === 'ground')[0];
+            const turtle = new TurtleEnemy(seg.x + seg.width - 60, seg.y - CONFIG.ENEMY_SIZE);
+            turtle.velocityX = 2;                 // heading for the drop
+            enemies.push(turtle);
+            rebuildSolids();
+            for (let i = 0; i < 90; i++) turtle.update();
+            assert(turtle.velocityX < 0, 'a walking turtle should turn back from the edge');
+            assert(turtle.y < CONFIG.WORLD_HEIGHT, 'a walking turtle should not fall in');
+        });
+
+        edgeTests.test('a kicked shell sails off the edge instead of bouncing back', () => {
+            initLevel();
+            const seg = platforms.filter(p => p.variant === 'ground')[0];
+            const turtle = new TurtleEnemy(seg.x + seg.width - 120, seg.y - CONFIG.ENEMY_SIZE);
+            enemies.push(turtle);
+            rebuildSolids();
+
+            turtle.inShell = true;
+            turtle.kickShell(true);               // kicked to the right, toward the pit
+            assert(turtle.isShellSliding, 'shell should be sliding');
+            assert(!turtle.avoidsLedges(), 'a sliding shell should ignore ledges');
+
+            const startX = turtle.x;
+            for (let i = 0; i < 120 && turtle.alive; i++) turtle.update();
+            assert(turtle.x > startX, 'the shell should keep travelling toward the drop');
+            assert(!turtle.alive || turtle.y > seg.y, 'the shell should have gone over the edge');
+        });
+
+        edgeTests.test('a shell that falls in a pit is gone, not scored', () => {
+            initLevel();
+            const seg = platforms.filter(p => p.variant === 'ground')[0];
+            const turtle = new TurtleEnemy(seg.x + seg.width - 60, seg.y - CONFIG.ENEMY_SIZE);
+            enemies.push(turtle);
+            rebuildSolids();
+            turtle.inShell = true;
+            turtle.kickShell(true);
+            const scoreBefore = gameState.score;
+            for (let i = 0; i < 240 && turtle.alive; i++) turtle.update();
+            assert(!turtle.alive, 'the shell should be gone');
+            assertEqual(gameState.score, scoreBefore, 'falling in a pit should not award points');
+        });
+
+        // Test Suite 15: Shadows
+        const shadowTests = new TestRunner('Cast Shadows');
+
+        // Finds ground with nothing stacked above it, so the tests measure the
+        // shadow logic rather than whatever block happens to be overhead.
+        function openGroundColumn() {
+            initLevel();
+            rebuildSolids();
+            const ground = platforms.filter(p => p.variant === 'ground');
+            for (const seg of ground) {
+                for (let x = seg.x + 40; x < seg.x + seg.width - 80; x += 20) {
+                    const column = { x, y: 0, width: 40, height: seg.y - 4 };
+                    const blocked = solidCache.some(sol => sol !== seg && overlaps(column, sol));
+                    if (!blocked) return { seg, x };
+                }
+            }
+            return null;
+        }
+
+        shadowTests.test('surfaceBelow finds the floor under a body', () => {
+            const spot = openGroundColumn();
+            assert(spot, 'level should have at least one open column');
+            const box = { x: spot.x, y: 100, width: 40, height: 40 };
+            assertEqual(surfaceBelow(box), spot.seg.y, 'should find the ground below');
+        });
+
+        shadowTests.test('surfaceBelow lands on the nearest surface, not the floor', () => {
+            initLevel();
+            rebuildSolids();
+            // Directly under a block row, the shadow belongs on the block.
+            const block = blocks.find(b => !b.destroyed && b.y < GROUND_Y - 80);
+            const box = { x: block.x + 4, y: block.y - 200, width: 32, height: 40 };
+            assertEqual(surfaceBelow(box), block.y, 'shadow should fall on the block, not the ground');
+        });
+
+        shadowTests.test('surfaceBelow reports nothing when there is no floor', () => {
+            initLevel();
+            rebuildSolids();
+            const saved = solidCache;
+            try {
+                solidCache = [{ x: 0, y: 500, width: 100, height: 40 }];
+                assertEqual(surfaceBelow({ x: 200, y: 100, width: 40, height: 40 }), null,
+                    'a body over open air should cast no shadow');
+                assertEqual(surfaceBelow({ x: 20, y: 100, width: 40, height: 40 }), 500,
+                    'a body over a floor should find it');
+                assertEqual(surfaceBelow({ x: 20, y: 600, width: 40, height: 40 }), null,
+                    'a surface above the body is not below it');
+            } finally {
+                solidCache = saved;
+            }
+        });
+
+        shadowTests.test('the shadow stays put as the body rises', () => {
+            const spot = openGroundColumn();
+            const low = { x: spot.x, y: spot.seg.y - 40, width: 40, height: 40 };
+            const high = { x: spot.x, y: spot.seg.y - 200, width: 40, height: 40 };
+            // Both resolve to the same surface: the shadow does not travel with
+            // the jump the way a sprite-attached one did.
+            assertEqual(surfaceBelow(low), surfaceBelow(high), 'shadow target should not move with the jump');
+            assertEqual(surfaceBelow(high), spot.seg.y, 'shadow should stay on the ground');
+        });
+
+        // Test Suite 16: PWA
         const pwaTests = new TestRunner('PWA Support');
 
         pwaTests.test('Manifest link exists', () => {
@@ -451,6 +797,11 @@
                 collisionTests,
                 levelTests,
                 blockTests,
+                geometryTests,
+                deathTests,
+                courtesyTests,
+                edgeTests,
+                shadowTests,
                 pwaTests
             ];
 
