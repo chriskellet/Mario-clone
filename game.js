@@ -5107,9 +5107,24 @@ function setupTouchControls() {
 
 let startingGame = false;
 
-async function startGame() {
+const GAME_MODE = { SINGLE: 'single', MULTI: 'multi' };
+
+// The start screen's one-line explanation slot: why multiplayer is unavailable,
+// or that a join failed and the run is solo. Cleared on the next start.
+function showModeNote(message) {
+    const note = document.getElementById('mode-note');
+    if (!note) return;
+    note.textContent = message || '';
+    note.classList.toggle('hidden', !message);
+}
+
+async function startGame(mode) {
     if (startingGame) return;
     startingGame = true;
+
+    // "Play Again" repeats whatever was chosen on the menu.
+    const requestedMode = mode || gameState.mode || GAME_MODE.SINGLE;
+    gameState.mode = requestedMode;
 
     try {
         unlockAudio();
@@ -5120,11 +5135,16 @@ async function startGame() {
         const nameInput = document.getElementById('player-name');
         const playerName = (nameInput && nameInput.value.trim()) || 'Player';
 
-        // Connect to multiplayer
-        if (multiplayer.db && !multiplayerState.connected) {
-            const connected = await multiplayer.connect(playerName);
+        // Connect to multiplayer. Single player never touches the network at
+        // all - no sign-in, no reads, no writes.
+        let joinFailed = false;
+        if (requestedMode === GAME_MODE.MULTI && !multiplayerState.connected) {
+            const connected = multiplayer.db && await multiplayer.connect(playerName);
             if (!connected) {
                 console.warn('Failed to connect to multiplayer, continuing in single player mode');
+                joinFailed = true;
+                // Left on the start screen for when they come back to it.
+                showModeNote('Could not reach the multiplayer server. That run was solo.');
             }
         }
 
@@ -5143,7 +5163,10 @@ async function startGame() {
         player.hasUsedContinue = false;
 
         updateHUD();
-        showBanner('Level 1', multiplayerState.connected ? 'Multiplayer' : 'Reach the flag!', 1800);
+        const subtitle = multiplayerState.connected ? 'Multiplayer'
+            : joinFailed ? 'Multiplayer unavailable - playing solo'
+            : 'Reach the flag!';
+        showBanner('Level 1', subtitle, joinFailed ? 2600 : 1800);
         gameLoop();
         music.start();
     } catch (error) {
@@ -5322,17 +5345,37 @@ function onActivate(element, handler) {
     });
 }
 
-function handleStartGame(e) {
+function handleStartGame(e, mode) {
     if (e) {
         e.preventDefault();
         e.stopPropagation();
     }
     unlockAudio();
-    startGame();
+    startGame(mode);
 }
 
-onActivate(document.getElementById('start-btn'), handleStartGame);
+// Returns to the start screen so the mode can be changed between runs.
+function returnToMenu() {
+    gameState.running = false;
+    gameState.paused = false;
+    stopLoop();
+    music.stop();
+    clearCountdowns();
+
+    if (multiplayerState.connected) multiplayer.disconnect();
+
+    ['game-over-screen', 'out-of-lives-screen', 'pause-screen']
+        .forEach(id => setScreenVisible(id, false));
+    setScreenVisible('start-screen', true);
+
+    const leaderboard = document.getElementById('leaderboard');
+    if (leaderboard) leaderboard.classList.add('hidden');
+}
+
+onActivate(document.getElementById('multiplayer-btn'), (e) => handleStartGame(e, GAME_MODE.MULTI));
+onActivate(document.getElementById('single-player-btn'), (e) => handleStartGame(e, GAME_MODE.SINGLE));
 onActivate(document.getElementById('restart-btn'), handleStartGame);
+onActivate(document.getElementById('main-menu-btn'), returnToMenu);
 onActivate(document.getElementById('continue-btn'), () => {
     const button = document.getElementById('continue-btn');
     if (button && !button.disabled) useContinue();
@@ -5346,12 +5389,22 @@ onActivate(document.getElementById('quit-btn'), () => {
 onActivate(document.getElementById('btn-mute'), toggleMute);
 onActivate(document.getElementById('btn-pause'), () => setPaused(!gameState.paused));
 
-// Enter starts the game from the name field
+// Enter starts the game from the name field. The name only matters in
+// multiplayer, so that is what Enter starts.
 const nameInput = document.getElementById('player-name');
 if (nameInput) {
     nameInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') handleStartGame(e);
+        if (e.key === 'Enter') handleStartGame(e, GAME_MODE.MULTI);
     });
+}
+
+// If the Firebase SDK never loaded there is nothing to join, so say so on the
+// menu rather than letting the button fail on click. A sign-in or rules
+// failure cannot be detected up front - that surfaces as a fallback at start.
+if (!multiplayer.db) {
+    const multiplayerBtn = document.getElementById('multiplayer-btn');
+    if (multiplayerBtn) multiplayerBtn.disabled = true;
+    showModeNote('Multiplayer is unavailable - the game could not reach Firebase.');
 }
 
 // ============================================================================

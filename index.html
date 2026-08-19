@@ -10,9 +10,9 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Mario Clone">
     <meta name="theme-color" content="#E52521">
-    <link rel="manifest" href="manifest.json?v=4">
+    <link rel="manifest" href="manifest.json?v=5">
     <title>Mario Clone - Touch Edition</title>
-    <link rel="stylesheet" href="styles.css?v=4">
+    <link rel="stylesheet" href="styles.css?v=5">
     <script>
         // Force service worker update on page load
         if ('serviceWorker' in navigator) {
@@ -80,8 +80,10 @@
                 <h3>🏆 All-Time Best</h3>
                 <div id="all-time-list"></div>
             </div>
-            <input type="text" id="player-name" class="name-input" placeholder="Enter your name..." maxlength="15" autocomplete="off">
-            <button id="start-btn" class="menu-btn">Start Game</button>
+            <input type="text" id="player-name" class="name-input" placeholder="Your name (multiplayer)" maxlength="15" autocomplete="off">
+            <button id="multiplayer-btn" class="menu-btn">Multiplayer</button>
+            <button id="single-player-btn" class="menu-btn secondary-btn">Single Player</button>
+            <p id="mode-note" class="mode-note hidden"></p>
             <div class="controls-help">
                 <span><b>← →</b> move</span>
                 <span><b>Space / ↑</b> jump</span>
@@ -98,6 +100,7 @@
                 <div><span class="result-label">World</span><span id="final-level">1</span></div>
             </div>
             <button id="restart-btn" class="menu-btn">Play Again</button>
+            <button id="main-menu-btn" class="menu-btn secondary-btn">Main Menu</button>
         </div>
         <div id="pause-screen" class="screen hidden">
             <h1>Paused</h1>
@@ -140,12 +143,12 @@
             console.warn('Firebase SDK did not load - running in single player.');
         }
     </script>
-    <script src="game.js?v=4"></script>
+    <script src="game.js?v=5"></script>
     <script>
         // Register service worker for PWA support with auto-update
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js?v=4')
+                navigator.serviceWorker.register('sw.js?v=5')
                     .then(reg => {
                         console.log('Service Worker registered');
 
