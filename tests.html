@@ -335,48 +335,126 @@
         });
 
         // Test Suite 9: Level construction
+        // Every check below runs against every level in the campaign, not just
+        // the first one: a stage that is only ever reached on the fourth clear
+        // is exactly the one nobody plays by hand before shipping.
         const levelTests = new TestRunner('Level Construction');
 
-        levelTests.test('initLevel builds a populated level', () => {
-            initLevel();
-            assert(platforms.length > 10, 'not enough platforms');
-            assert(blocks.length > 0, 'no blocks');
-            assert(coins.length > 0, 'no coins');
-            assert(portals.length > 0, 'no enemy pipes');
-            assert(enemies.length > 0, 'no enemies in single player');
-            assert(flagpole, 'no flagpole in single player');
+        /** Builds each level in turn and hands it to fn(design, label). */
+        function eachLevel(fn) {
+            const restore = gameState.level;
+            try {
+                for (let i = 0; i < LEVELS.length; i++) {
+                    gameState.level = i + 1;
+                    initLevel();
+                    fn(LEVELS[i], worldLabel(i + 1));
+                }
+            } finally {
+                gameState.level = restore;
+                initLevel();
+            }
+        }
+
+        levelTests.test('the campaign has several distinct levels', () => {
+            assert(LEVELS.length >= 5, `only ${LEVELS.length} levels in the campaign`);
+            const names = new Set(LEVELS.map(l => l.name));
+            assertEqual(names.size, LEVELS.length, 'two levels share a name');
+            const themes = new Set(LEVELS.map(l => l.theme));
+            assert(themes.size >= 4, `only ${themes.size} distinct settings across the campaign`);
+            LEVELS.forEach(l => assert(THEMES[l.theme], `${l.name} uses unknown theme ${l.theme}`));
         });
 
-        levelTests.test('the level is deterministic so multiplayer stays in sync', () => {
-            initLevel();
-            const first = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
-            initLevel();
-            const second = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
-            assertEqual(first, second, 'coin layout differs between builds');
+        levelTests.test('the world number counts levels and laps', () => {
+            assertEqual(worldLabel(1), '1-1', 'first level should be 1-1');
+            assertEqual(worldLabel(LEVELS.length), `1-${LEVELS.length}`, 'last level of lap one');
+            assertEqual(worldLabel(LEVELS.length + 1), '2-1', 'the campaign should loop into lap 2');
+        });
+
+        levelTests.test('initLevel builds a populated level', () => {
+            eachLevel((design, label) => {
+                assert(platforms.length > 6, `${label} has only ${platforms.length} platforms`);
+                assert(blocks.length > 0, `${label} has no blocks`);
+                assert(coins.length > 0, `${label} has no coins`);
+                assert(portals.length > 0, `${label} has no enemy pipes`);
+                assert(enemies.length > 0, `${label} has no enemies in single player`);
+                assert(flagpole, `${label} has no flagpole`);
+                assertEqual(CONFIG.WORLD_WIDTH, design.width, `${label} did not size the world`);
+                assert(design.flag < design.width, `${label} puts the flag outside the world`);
+            });
+        });
+
+        levelTests.test('each level is deterministic so multiplayer stays in sync', () => {
+            eachLevel((design, label) => {
+                const first = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
+                initLevel();
+                const second = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
+                assertEqual(first, second, `${label} coin layout differs between builds`);
+            });
         });
 
         levelTests.test('coin indices are unique', () => {
-            initLevel();
-            const seen = new Set(coins.map(c => c.index));
-            assertEqual(seen.size, coins.length, 'duplicate coin indices would break Firebase claims');
+            eachLevel((design, label) => {
+                const seen = new Set(coins.map(c => c.index));
+                assertEqual(seen.size, coins.length, `${label} has duplicate coin indices`);
+            });
         });
 
         levelTests.test('the ground has gaps to fall into', () => {
-            initLevel();
-            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
-            assert(ground.length > 1, 'ground should be split into segments');
-            const hasGap = ground.some((seg, i) => i > 0 && seg.x > ground[i - 1].x + ground[i - 1].width);
-            assert(hasGap, 'no pits found in the level');
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                assert(ground.length > 1, `${label} ground should be split into segments`);
+                const hasGap = ground.some((seg, i) => i > 0 && seg.x > ground[i - 1].x + ground[i - 1].width);
+                assert(hasGap, `${label} has no pits`);
+            });
+        });
+
+        levelTests.test('the world is wide enough to hold the level', () => {
+            eachLevel((design, label) => {
+                const ground = design.ground[design.ground.length - 1];
+                assertEqual(ground[0] + ground[1], design.width,
+                    `${label} ground does not reach the end of the world`);
+                assert(design.ground[0][0] === 0, `${label} has no ground under the spawn point`);
+            });
         });
 
         levelTests.test('respawn points are never over a pit', () => {
-            initLevel();
-            for (let i = 0; i < 40; i++) {
-                const spot = player.getRandomRespawnLocation();
-                const supported = platforms.some(p =>
-                    spot.x + player.width > p.x && spot.x < p.x + p.width && p.y >= spot.y);
-                assert(supported, `respawn at ${Math.round(spot.x)} has nothing below it`);
-            }
+            eachLevel((design, label) => {
+                for (let i = 0; i < 40; i++) {
+                    const spot = player.getRandomRespawnLocation();
+                    const supported = platforms.some(p =>
+                        spot.x + player.width > p.x && spot.x < p.x + p.width && p.y >= spot.y);
+                    assert(supported, `${label}: respawn at ${Math.round(spot.x)} has nothing below it`);
+                }
+            });
+        });
+
+        levelTests.test('enemies and pipes start on solid footing', () => {
+            eachLevel((design, label) => {
+                rebuildSolids();
+                const stranded = [];
+                for (const enemy of enemies) {
+                    const probe = { x: enemy.x, y: enemy.y, width: enemy.width, height: enemy.height + 40 };
+                    const footing = solidCache.some(s => !s.oneWay &&
+                        s.x < probe.x + probe.width && s.x + s.width > probe.x &&
+                        s.y >= enemy.y + enemy.height - 1 && s.y < probe.y + probe.height);
+                    if (!footing) stranded.push(`enemy@${Math.round(enemy.x)}`);
+                    // Nothing should start the level embedded in a wall. Pipes
+                    // are the exception: enemies are posted in front of them on
+                    // purpose, and walk clear on the first step.
+                    const buried = solidCache.some(s =>
+                        !s.oneWay && !portals.includes(s) && overlaps(enemy, s));
+                    if (buried) stranded.push(`enemy inside a solid @${Math.round(enemy.x)}`);
+                }
+                for (const portal of portals) {
+                    const seg = platforms.find(p => p.variant === 'ground' &&
+                        portal.x >= p.x && portal.x + portal.width <= p.x + p.width);
+                    const onLedge = platforms.some(p => p.variant !== 'ground' &&
+                        Math.abs(p.y - (portal.y + portal.height)) < 1 &&
+                        portal.x >= p.x && portal.x + portal.width <= p.x + p.width);
+                    if (!seg && !onLedge) stranded.push(`pipe@${Math.round(portal.x)}`);
+                }
+                assert(stranded.length === 0, `${label}: ${stranded.slice(0, 3).join(', ')}`);
+            });
         });
 
         // Test Suite 10: Blocks and power-ups
@@ -436,7 +514,6 @@
         const geometryTests = new TestRunner('Level Geometry');
 
         function levelSolids() {
-            initLevel();
             rebuildSolids();
             return solidCache.slice();
         }
@@ -444,6 +521,7 @@
         const describe = s => `${s.variant || s.type || 'pipe'}@(${Math.round(s.x)},${Math.round(s.y)})`;
 
         geometryTests.test('no two solids occupy the same space', () => {
+            eachLevel((design, label) => {
             const solids = levelSolids();
             const clashes = [];
             for (let i = 0; i < solids.length; i++) {
@@ -453,10 +531,12 @@
                     }
                 }
             }
-            assert(clashes.length === 0, `overlapping solids: ${clashes.slice(0, 3).join(', ')}`);
+            assert(clashes.length === 0, `${label} overlapping solids: ${clashes.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('no gap is too narrow to walk into', () => {
+            eachLevel((design, label) => {
             const solids = levelSolids();
             const width = CONFIG.PLAYER_SIZE;
             const bad = [];
@@ -475,10 +555,12 @@
                     if (!filled) bad.push(`${Math.round(gap)}px at ${describe(left)}`);
                 }
             }
-            assert(bad.length === 0, `unwalkable slots: ${bad.slice(0, 3).join(', ')}`);
+            assert(bad.length === 0, `${label} unwalkable slots: ${bad.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('no tunnel is too short to fit under', () => {
+            eachLevel((design, label) => {
             const solids = levelSolids();
             const height = CONFIG.PLAYER_SIZE;
             const bad = [];
@@ -497,10 +579,12 @@
                     if (!filled) bad.push(`${Math.round(gap)}px under ${describe(top)}`);
                 }
             }
-            assert(bad.length === 0, `crawlspaces: ${bad.slice(0, 3).join(', ')}`);
+            assert(bad.length === 0, `${label} crawlspaces: ${bad.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('every exposed surface has somewhere to stand', () => {
+            eachLevel((design, label) => {
             const solids = levelSolids();
             const size = CONFIG.PLAYER_SIZE;
             const bad = [];
@@ -520,16 +604,23 @@
                 }
                 if (free === 0) bad.push(describe(surface));
             }
-            assert(bad.length === 0, `nowhere to stand on: ${bad.slice(0, 3).join(', ')}`);
+            assert(bad.length === 0, `${label} nowhere to stand on: ${bad.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('the layout sits on the grid', () => {
-            initLevel();
-            const offGrid = [...platforms, ...blocks]
-                .filter(s => s.variant !== 'cloud')
-                .filter(s => s.x % GRID !== 0 || s.width % GRID !== 0)
-                .map(describe);
-            assert(offGrid.length === 0, `off-grid: ${offGrid.slice(0, 3).join(', ')}`);
+            eachLevel((design, label) => {
+                const offGrid = [...platforms, ...blocks]
+                    .filter(s => s.variant !== 'cloud')
+                    .filter(s => {
+                        // A moving platform is judged where it was laid out,
+                        // not wherever its patrol has taken it.
+                        const x = s.homeX === undefined ? s.x : s.homeX;
+                        return x % GRID !== 0 || s.width % GRID !== 0;
+                    })
+                    .map(describe);
+                assert(offGrid.length === 0, `${label} off-grid: ${offGrid.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('each tier is within one jump of the one below', () => {
@@ -544,16 +635,222 @@
             }
         });
 
-        geometryTests.test('every pit is jumpable', () => {
-            initLevel();
-            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
-            // A running jump hangs for roughly 50 frames at 7.2px/frame.
-            const reach = 50 * CONFIG.RUN_SPEED * 0.75;
-            for (let i = 1; i < ground.length; i++) {
-                const gap = ground[i].x - (ground[i - 1].x + ground[i - 1].width);
-                assert(gap > 0, 'ground segments should not touch');
-                assert(gap < reach, `a ${gap}px pit is wider than a ${Math.round(reach)}px jump`);
+        // A running jump hangs for roughly 50 frames at 7.2px/frame, and clears
+        // about 158px of climb. Both are kept a little short of the measured
+        // figures so no crossing is gated behind a pixel-perfect jump.
+        const jumpReach = () => 50 * CONFIG.RUN_SPEED * 0.75;
+        const JUMP_RISE = 138;
+
+        /**
+         * Everything you could land on, described by the whole stretch of world
+         * it covers. A moving platform counts along its entire patrol: the
+         * lowest point is where you can board it, the highest is where it can
+         * put you down.
+         */
+        function steppingStones() {
+            const stones = [];
+            for (const p of platforms) {
+                if (p.variant === 'ground') continue;
+                const t = p.travel || p;
+                stones.push({
+                    x0: t.x, x1: t.x + t.width,
+                    board: t.y + t.height - p.height,   // top at its lowest
+                    lift: t.y,                          // top at its highest
+                });
             }
+            for (const b of blocks) {
+                if (b.destroyed) continue;
+                stones.push({ x0: b.x, x1: b.x + b.width, board: b.y, lift: b.y });
+            }
+            return stones.sort((a, b) => a.x0 - b.x0);
+        }
+
+        geometryTests.test('every pit can be crossed', () => {
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const stones = steppingStones();
+                const reach = jumpReach();
+
+                for (let i = 1; i < ground.length; i++) {
+                    const gapStart = ground[i - 1].x + ground[i - 1].width;
+                    const gapEnd = ground[i].x;
+                    assert(gapEnd > gapStart, `${label} ground segments should not touch`);
+                    if (gapEnd - gapStart < reach) continue;        // one jump clears it
+
+                    // Otherwise it has to be bridged. Walk the stepping stones
+                    // left to right and see whether they actually get you over.
+                    let edge = gapStart;        // furthest point you can jump from
+                    let standing = GROUND_Y;    // and how high you are standing
+
+                    for (const stone of stones) {
+                        if (stone.x1 <= edge) continue;
+                        if (stone.x0 > gapEnd) break;
+                        if (stone.x0 - edge > reach) break;          // out of range
+                        if (standing - stone.board > JUMP_RISE) continue;   // out of climb
+                        edge = Math.max(edge, stone.x1);
+                        standing = Math.min(standing, stone.lift);
+                    }
+
+                    const shortfall = Math.round(gapEnd - edge - reach);
+                    assert(gapEnd - edge <= reach,
+                        `${label}: the chasm at ${gapStart} is ${shortfall}px past what a jump ` +
+                        `and its stepping stones can cover`);
+                }
+            });
+        });
+
+        geometryTests.test('nothing hangs at head height over a pit', () => {
+            // A block row over a chasm is a trap rather than a challenge: a
+            // running jump arcs straight into its side, and there is no floor
+            // below to duck along instead.
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const traps = [];
+                for (const block of blocks) {
+                    if (block.y < TIER.mid || block.y > GROUND_Y) continue;
+                    const overGround = ground.some(g =>
+                        block.x >= g.x && block.x + block.width <= g.x + g.width);
+                    if (!overGround) traps.push(describe(block));
+                }
+                assert(traps.length === 0, `${label} blocks hang over a pit: ${traps.slice(0, 3).join(', ')}`);
+            });
+        });
+
+        geometryTests.test('no wall along the ground is taller than a jump', () => {
+            // A pipe with a ledge over it and a block row over that is three
+            // legal pieces of geometry stacked into one impassable wall. What
+            // matters is the climb from one step to the next along the floor.
+            eachLevel((design, label) => {
+                const solids = levelSolids();
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const HEADROOM = 48;    // a gap smaller than this is not a way through
+                const CLIMB = 150;      // a running jump clears ~199px
+                const walls = [];
+
+                // The top of the stack sitting on the ground at this column,
+                // counting anything joined to it by a gap too small to duck into.
+                const stackTop = (x, groundY) => {
+                    const column = solids
+                        .filter(s => s.x < x + 20 && s.x + s.width > x && s.y < groundY)
+                        .sort((a, b) => b.y - a.y);
+                    let top = groundY;
+                    for (const s of column) {
+                        if (s.y + s.height < top - HEADROOM) break;   // a passage opens up
+                        top = Math.min(top, s.y);
+                    }
+                    return top;
+                };
+
+                for (const segment of ground) {
+                    let previous = segment.y;
+                    for (let x = segment.x; x < segment.x + segment.width - 20; x += 20) {
+                        const top = stackTop(x, segment.y);
+                        if (previous - top > CLIMB) {
+                            walls.push(`${Math.round(previous - top)}px step up at ${x}`);
+                        }
+                        previous = top;
+                    }
+                }
+                assert(walls.length === 0, `${label}: ${walls.slice(0, 3).join(', ')}`);
+            });
+        });
+
+        geometryTests.test('moving platforms never run into the scenery', () => {
+            eachLevel((design, label) => {
+                rebuildSolids();
+                const clashes = [];
+                for (const mover of movers) {
+                    const swept = mover.travel;
+                    for (const solid of solidCache) {
+                        if (solid === mover) continue;
+                        if (overlaps(swept, solid)) clashes.push(`${describe(mover)} into ${describe(solid)}`);
+                    }
+                }
+                assert(clashes.length === 0, `${label}: ${clashes.slice(0, 3).join(', ')}`);
+            });
+        });
+
+        geometryTests.test('moving platforms stay inside the world', () => {
+            eachLevel((design, label) => {
+                for (const mover of movers) {
+                    const swept = mover.travel;
+                    assert(swept.x >= 0 && swept.x + swept.width <= CONFIG.WORLD_WIDTH,
+                        `${label}: ${describe(mover)} travels outside the world`);
+                    assert(swept.y > 40 && swept.y + swept.height < CONFIG.WORLD_HEIGHT + 40,
+                        `${label}: ${describe(mover)} travels off the top or bottom`);
+                }
+            });
+        });
+
+        geometryTests.test('hazards sit on the level, not floating in it', () => {
+            eachLevel((design, label) => {
+                rebuildSolids();
+                for (const hazard of hazards) {
+                    assert(hazard.x >= 0 && hazard.x + hazard.width <= CONFIG.WORLD_WIDTH,
+                        `${label}: hazard at ${hazard.x} is outside the world`);
+                    if (hazard.variant !== 'spikes') continue;
+                    // Spikes are stood on, so they need a floor under them.
+                    const floor = solidCache.some(s => !s.oneWay &&
+                        s.x <= hazard.x && s.x + s.width >= hazard.x + hazard.width &&
+                        Math.abs(s.y - (hazard.y + hazard.height)) < 2);
+                    assert(floor, `${label}: spikes at ${hazard.x} have no floor under them`);
+                }
+                for (const spring of springs) {
+                    const floor = solidCache.some(s => !s.oneWay &&
+                        s.x <= spring.x && s.x + s.width >= spring.x + spring.width &&
+                        Math.abs(s.y - (spring.y + spring.height)) < 2);
+                    assert(floor, `${label}: the bounce pad at ${spring.x} is floating`);
+                }
+            });
+        });
+
+        geometryTests.test('bounce pads have room to bounce and land', () => {
+            // A pad at the lip of a chasm launches you 400px up and drops you
+            // into it on the way down, and a pad under a ledge just bonks.
+            eachLevel((design, label) => {
+                rebuildSolids();
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const bad = [];
+
+                for (const spring of springs) {
+                    const segment = ground.find(g =>
+                        spring.x >= g.x && spring.x + spring.width <= g.x + g.width);
+                    if (!segment) { bad.push(`pad at ${spring.x} is not on the ground`); continue; }
+
+                    // A pad inside a pipe is a pad nobody can ever stand on.
+                    const inside = solidCache.find(s => s !== segment && overlaps(spring, s));
+                    if (inside) bad.push(`pad at ${spring.x} is buried in ${describe(inside)}`);
+
+                    const before = spring.x - segment.x;
+                    const after = (segment.x + segment.width) - (spring.x + spring.width);
+                    // The world's own edges are walls, not pits.
+                    if (segment.x > 0 && before < 120) bad.push(`pad at ${spring.x} is ${before}px from the drop behind it`);
+                    if (segment.x + segment.width < CONFIG.WORLD_WIDTH && after < 120) {
+                        bad.push(`pad at ${spring.x} is ${after}px from the drop ahead of it`);
+                    }
+
+                    // One-way ledges do not count: you bounce straight through.
+                    const ceiling = solidCache
+                        .filter(s => !s.oneWay && s.x < spring.x + spring.width && s.x + s.width > spring.x)
+                        .filter(s => s.y + s.height <= spring.y + 1)
+                        .reduce((lowest, s) => Math.max(lowest, s.y + s.height), -Infinity);
+                    const headroom = ceiling === -Infinity ? Infinity : spring.y - ceiling;
+                    if (headroom < 200) bad.push(`pad at ${spring.x} has only ${Math.round(headroom)}px of headroom`);
+                }
+                assert(bad.length === 0, `${label}: ${bad.slice(0, 3).join(', ')}`);
+            });
+        });
+
+        geometryTests.test('lava fills a pit rather than blocking the path', () => {
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                for (const hazard of hazards) {
+                    if (hazard.variant !== 'lava') continue;
+                    const onGround = ground.some(g =>
+                        hazard.x < g.x + g.width && hazard.x + hazard.width > g.x);
+                    assert(!onGround, `${label}: lava at ${hazard.x} overlaps a walkable stretch`);
+                }
+            });
         });
 
         // Test Suite 12: Death and respawn
@@ -1076,23 +1373,136 @@
         });
 
         powerUpTests.test('every mushroom block has a runway before the next pit', () => {
-            initLevel();
-            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
-            const tight = [];
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const tight = [];
 
-            for (const row of BLOCK_ROWS) {
-                row.items.forEach(([, contents], i) => {
-                    if (contents !== 'mushroom' && contents !== 'star') return;
-                    const x = row.x + i * GRID;
-                    const seg = ground.find(g => x >= g.x && x < g.x + g.width);
-                    if (!seg) { tight.push(`${contents}@${x} is not over ground`); return; }
-                    // Power-ups walk right, so the run to the end of this
-                    // stretch of ground is what matters.
-                    const runway = (seg.x + seg.width) - (x + GRID);
-                    if (runway < 200) tight.push(`${contents}@${x} has only ${runway}px before the drop`);
-                });
+                for (const row of design.blocks || []) {
+                    row.items.forEach(([, contents], i) => {
+                        if (contents !== 'mushroom' && contents !== 'star') return;
+                        const x = row.x + i * GRID;
+                        const seg = ground.find(g => x >= g.x && x < g.x + g.width);
+                        if (!seg) { tight.push(`${contents}@${x} is not over ground`); return; }
+                        // Power-ups walk right, so the run to the end of this
+                        // stretch of ground is what matters.
+                        const runway = (seg.x + seg.width) - (x + GRID);
+                        if (runway < 200) tight.push(`${contents}@${x} has only ${runway}px before the drop`);
+                    });
+                }
+                assert(tight.length === 0, `${label}: ${tight.join(', ')}`);
+            });
+        });
+
+        powerUpTests.test('every level offers a way to grow', () => {
+            for (const design of LEVELS) {
+                const items = (design.blocks || []).flatMap(row => row.items.map(item => item[1]));
+                assert(items.includes('mushroom'), `${design.name} has no mushroom anywhere`);
             }
-            assert(tight.length === 0, tight.join(', '));
+        });
+
+        // Test Suite 19b: The moving parts introduced by the later levels
+        const rideTests = new TestRunner('Moving Platforms, Springs and Hazards');
+
+        rideTests.test('a moving platform turns around at the end of its run', () => {
+            const mover = new MovingPlatform(400, 300, 120, { axis: 'x', range: 80, speed: 2 });
+            let min = mover.x, max = mover.x;
+            for (let i = 0; i < 400; i++) {
+                mover.update();
+                min = Math.min(min, mover.x);
+                max = Math.max(max, mover.x);
+            }
+            assertEqual(Math.round(min), 320, 'should not travel past its left limit');
+            assertEqual(Math.round(max), 480, 'should not travel past its right limit');
+        });
+
+        rideTests.test('a moving platform is deterministic', () => {
+            const a = new MovingPlatform(400, 300, 120, { axis: 'y', range: 60, speed: 1.3 });
+            const b = new MovingPlatform(400, 300, 120, { axis: 'y', range: 60, speed: 1.3 });
+            for (let i = 0; i < 137; i++) { a.update(); b.update(); }
+            assertEqual(a.y, b.y, 'two identical platforms drifted apart');
+        });
+
+        rideTests.test('a rider is carried along with the platform', () => {
+            initLevel();
+            const mover = new MovingPlatform(600, 300, 120, { axis: 'x', range: 100, speed: 2 });
+            platforms.push(mover);
+            movers.push(mover);
+            rebuildSolids();
+
+            player.x = 640;
+            player.y = mover.y - player.height;
+            player.velocityY = 1;
+            moveAndCollide(player);          // land on it, taking the reference
+            assertEqual(player.ridingPlatform, mover, 'standing on it should count as riding it');
+
+            const before = player.x;
+            mover.update();
+            carryRiders();
+            assertEqual(Math.round(player.x - before), Math.round(mover.dx),
+                'the rider should move exactly as far as the platform did');
+        });
+
+        rideTests.test('a rider is not shoved into a wall', () => {
+            initLevel();
+            const mover = new MovingPlatform(600, 300, 120, { axis: 'x', range: 100, speed: 4 });
+            const wall = new Platform(760, 200, 40, 200, 'brick');
+            platforms.push(mover, wall);
+            movers.push(mover);
+            rebuildSolids();
+
+            player.x = 720;                 // right up against the wall
+            player.y = mover.y - player.height;
+            player.ridingPlatform = mover;
+            mover.dx = 40;                  // a shove that would bury them in it
+            const before = player.x;
+            carryRiders();
+            assertEqual(player.x, before, 'the rider should be left behind, not embedded');
+            assert(!player.ridingPlatform, 'and should stop counting as a passenger');
+        });
+
+        rideTests.test('a spring throws the player higher than a jump', () => {
+            initLevel();
+            const spring = new Spring(player.x, player.y + player.height);
+            springs.push(spring);
+            player.velocityY = 4;           // coming down onto it
+            player.jumpHeld = false;
+            spring.update();
+            assertEqual(player.velocityY, CONFIG.SPRING_POWER, 'the pad should launch the player');
+            assert(CONFIG.SPRING_POWER < CONFIG.JUMP_POWER, 'a bounce should beat a jump');
+            assert(CONFIG.SPRING_POWER_HELD < CONFIG.SPRING_POWER, 'holding jump should go higher still');
+        });
+
+        rideTests.test('a spring ignores a player on the way up', () => {
+            initLevel();
+            const spring = new Spring(player.x, player.y + player.height);
+            springs.push(spring);
+            player.velocityY = -6;          // already rising through it
+            spring.update();
+            assertEqual(player.velocityY, -6, 'a rising player should pass by untouched');
+        });
+
+        rideTests.test('spikes cost the player a size, lava costs a life', () => {
+            initLevel();
+            player.health = 2;
+            player.setInvulnerable(false);
+            const spikes = new Hazard(player.x, player.y + player.height - 10, 40, 20, 'spikes');
+            spikes.update();
+            assertEqual(player.health, 1, 'spikes should knock a big player down to small');
+
+            initLevel();
+            player.setInvulnerable(false);
+            const lava = new Hazard(player.x, player.y, 40, 60, 'lava');
+            lava.update();
+            assert(player.dying, 'lava should be fatal whatever size you are');
+        });
+
+        rideTests.test('a star throws you out of the lava instead of saving you in it', () => {
+            initLevel();
+            player.giveStar();
+            const lava = new Hazard(player.x, player.y, 40, 60, 'lava');
+            lava.update();
+            assert(!player.dying, 'star power should survive a lava touch');
+            assert(player.velocityY < 0, 'and should throw the player clear');
         });
 
         // Test Suite 20: PWA
@@ -1340,6 +1750,7 @@
                 populationTests,
                 artTests,
                 powerUpTests,
+                rideTests,
                 pwaTests,
                 multiplayerTests
             ];

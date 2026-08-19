@@ -27,6 +27,40 @@ works the way you would expect.
 Reach the flagpole at the end of the level. Grabbing it higher up is worth more,
 and whatever is left on the clock is converted into a time bonus.
 
+## The single-player campaign
+
+Six hand-built levels, each with its own setting, its own music, and a new idea
+to get to grips with. Clear the last one and the campaign loops: the same six
+worlds come round again as lap 2, with faster enemies, reinforcements at the
+pipes and less time on the clock. The HUD shows where you are as `lap-level`,
+so `2-3` is the caverns on your second time through.
+
+| World | Level | What it brings |
+| --- | --- | --- |
+| 1-1 | **Green Hills** | The basics: stomping, blocks, short pits, pipes. |
+| 1-2 | **Cobalt Coast** | Wider chasms and bounce pads that fire you into the cloud line. |
+| 1-3 | **Crystal Caverns** | Underground. Spikes on the floor, rock pillars to climb and kick shells off. |
+| 1-4 | **Skyward Steps** | Almost no floor at all — three chasms crossed on platforms that will not wait for you. |
+| 1-5 | **Frostbite Pass** | Night, and nothing to grip. Momentum carries further than you mean it to. |
+| 1-6 | **Castle Inferno** | Everything at once, with lava under every gap. |
+
+### What is in them
+
+- **Moving platforms** carry you along, horizontally or vertically, and their
+  patrol is linear and deterministic — no two runs differ. Ride one into a wall
+  and it leaves you behind rather than burying you in the rock.
+- **Bounce pads** throw you roughly twice as high as a jump, and higher still if
+  you are holding the jump button as you land.
+- **Spikes** cost a big player their size, the same as walking into an enemy.
+- **Lava** fills the chasms of the last level and is fatal whatever size you
+  are — unless you are wearing a star, which throws you clear instead.
+- **Ice** turns the grip down on Frostbite Pass: top speed is unchanged, but you
+  keep sliding after you let go, and turning around takes real distance.
+
+Adding a level means adding an entry to `LEVELS` in `game.js` — ground, ledges,
+blocks, enemies, hazards and the flag, all as data. Everything else, including
+the coin layout, is built from that.
+
 ## Game mechanics
 
 - **Jumping** — variable height: tapping gives a short hop, holding gives a full
@@ -56,7 +90,8 @@ and whatever is left on the clock is converted into a time bonus.
   back on the last patch of solid ground you stood on, with a moment of grace
   and a few seconds of invulnerability before control returns.
 - **Levels** — clearing the flagpole awards a life and moves you to the next
-  world, with faster enemies and reinforcements each time.
+  world. Six levels make a lap; each lap after the first is faster, better
+  defended and shorter on time.
 
 ## Fair spawning
 
@@ -165,12 +200,17 @@ decide everyone else is asleep and seize the role.
   without letterboxing and stays sharp on retina panels.
 - **Deterministic levels.** Layout is data-driven and free of `Math.random`, so
   every player in a multiplayer session sees the same platforms and coins.
-- **Grid-aligned level.** Everything sits on a 40px grid — one cell is exactly
+- **Grid-aligned levels.** Everything sits on a 40px grid — one cell is exactly
   the player's width and height — and tiers are spaced three cells apart, well
   inside the ~158px a standing jump clears. Building on the grid is what keeps
   every gap either genuinely passable or honestly solid; hand-placed geometry
   drifts into 20 and 30px slots that look like openings but are too tight to
-  walk into. `tests.html` re-checks this on every run.
+  walk into. `tests.html` re-checks every level in the campaign on every run.
+- **Levels as data, themes as tables.** A level is a plain object — where the
+  ground breaks, what to stand on, what wants to kill you — and its theme is a
+  table entry giving the sky, the backdrop, the dirt, the masonry and the tune.
+  No renderer hard-codes a colour, so a new setting is a table entry rather than
+  a new drawing routine.
 - **Collision courtesies.** Clipping a few pixels of a block's corner on the
   way up slides you past it instead of killing the jump, and resolution always
   pushes clear of the deepest overlap so nothing ends up embedded in a stack of
@@ -194,22 +234,31 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 83 checks covering
+Open `tests.html` in a browser to run the test suite — 118 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
-level construction, level geometry (no overlapping solids, no impassable gaps,
-every tier reachable, every pit jumpable), block and power-up behaviour, and the
-death and respawn sequence, enemy behaviour at ledges, enemy population
-limits, fair spawning, hitbox fidelity against the rendered sprite, enemy
-artwork (the turtle's head and neck are scanned for in the rendered frame),
-power-up safety (a loose power-up turns at a ledge, and every power-up block
-has a runway before the next pit), and shadow casting, alongside DOM and
+level construction, block and power-up behaviour, the death and respawn
+sequence, enemy behaviour at ledges, enemy population limits, fair spawning,
+hitbox fidelity against the rendered sprite, enemy artwork (the turtle's head
+and neck are scanned for in the rendered frame), power-up safety, moving
+platforms, springs and hazards, and shadow casting, alongside DOM and
 configuration checks.
+
+The level-geometry suite runs against **every level in the campaign**, not just
+the first one — a stage you only reach on the fourth clear is exactly the one
+nobody plays by hand before shipping. It holds each of them to the same
+standard: no overlapping solids, no gap too narrow to walk into or too short to
+duck under, every surface has somewhere to stand, every tier within a jump of
+the one below, every chasm crossable (counting moving platforms along their
+whole patrol as stepping stones), no wall along the floor taller than a jump,
+nothing hanging at head height over a pit, moving platforms that never sweep
+into the scenery, bounce pads with room to bounce and land, and lava that fills
+a chasm rather than blocking a path.
 
 Built with:
 
 - HTML5 Canvas for rendering
 - Vanilla JavaScript for game logic
-- Web Audio API for sound effects and the chiptune loop
+- Web Audio API for sound effects and the chiptune loops (one per setting)
 - Firebase Realtime Database for multiplayer
 - CSS3 for the UI
 
