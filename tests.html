@@ -886,6 +886,48 @@
             assert(e.respawnTime, 'stomped enemies should respawn to keep the level alive');
         });
 
+        populationTests.test('a pipe will not spawn next to a player standing still', () => {
+            initLevel();
+            const portal = portals[0];
+            player.velocityX = 0;
+            player.direction = 1;
+            // Stand right on top of the pipe
+            player.x = portal.x; player.y = portal.y - player.height;
+            assert(portal.spawnWouldAmbush(player.x, player.y, player.width, player.height, 0, 1),
+                'standing on the pipe should block a spawn');
+        });
+
+        populationTests.test('a pipe will not spawn into the path of a runner', () => {
+            initLevel();
+            const portal = portals[0];
+            // 400px to the left of the pipe, running towards it: too close to be fair
+            const px = portal.x - 400, py = portal.y - CONFIG.PLAYER_SIZE;
+            assert(portal.spawnWouldAmbush(px, py, CONFIG.PLAYER_WIDTH, CONFIG.PLAYER_SIZE, CONFIG.RUN_SPEED, 1),
+                'a spawn in the runner\'s path should be blocked');
+            // Same spot, but running away from it
+            assert(!portal.spawnWouldAmbush(px, py, CONFIG.PLAYER_WIDTH, CONFIG.PLAYER_SIZE, -CONFIG.RUN_SPEED, -1),
+                'running away should not block the spawn');
+        });
+
+        populationTests.test('the safe distance scales with how fast you are going', () => {
+            initLevel();
+            const portal = portals[0];
+            const py = portal.y - CONFIG.PLAYER_SIZE;
+            const far = portal.x - 450;
+            // Walking at that distance is fine; sprinting into it is not.
+            assert(!portal.spawnWouldAmbush(far, py, CONFIG.PLAYER_WIDTH, CONFIG.PLAYER_SIZE, 1, 1),
+                'a slow approach from 450px should be allowed');
+            assert(portal.spawnWouldAmbush(far, py, CONFIG.PLAYER_WIDTH, CONFIG.PLAYER_SIZE, CONFIG.RUN_SPEED, 1),
+                'a sprint from 450px should be blocked');
+        });
+
+        populationTests.test('a pipe far from everyone still spawns', () => {
+            initLevel();
+            const portal = portals[0];
+            assert(!portal.spawnWouldAmbush(portal.x + 2000, portal.y, CONFIG.PLAYER_WIDTH, CONFIG.PLAYER_SIZE, 0, 1),
+                'a distant player should not block spawning forever');
+        });
+
         populationTests.test('pipes are rate limited', () => {
             assert(CONFIG.PORTAL_SPAWN_MIN >= 600, 'pipes should wait at least 10s between spawns');
             assert(CONFIG.MAX_ENEMIES_PER_TYPE <= 4, 'too many of one enemy type allowed at once');
@@ -907,7 +949,74 @@
             assertEqual(enemies.length, before, 'no enemy should have been added');
         });
 
-        // Test Suite 18: PWA
+        // Test Suite 18: Enemy artwork
+        const artTests = new TestRunner('Enemy Artwork');
+
+        artTests.test('a walking turtle\'s head is visible in front of its shell', () => {
+            initLevel();
+            rebuildSolids();
+
+            // Draw onto the real canvas - `ctx` is a module binding, so it
+            // cannot be swapped for a scratch context from out here.
+            gameState.camera.x = 0;
+            gameState.camera.y = 0;
+            ctx.clearRect(0, 0, view.w, view.h);
+
+            const turtle = new TurtleEnemy(70, 70);
+            turtle.alive = true;
+            turtle.inShell = false;
+            turtle.velocityX = 1;                       // facing right
+            turtle.draw();
+
+            const dpr = canvas.width / view.w;
+            const centreX = turtle.x + turtle.width / 2;
+            const shellRight = centreX - 5 + turtle.width / 2.7;
+            const scanFrom = Math.ceil((shellRight + 3) * dpr);
+            const scanTo = Math.min(canvas.width, Math.ceil((turtle.x + turtle.width + 10) * dpr));
+            const top = Math.max(0, Math.floor((turtle.y - 10) * dpr));
+            const bottom = Math.min(canvas.height, Math.ceil((turtle.y + turtle.height + 10) * dpr));
+
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            let headPixels = 0;
+            for (let y = top; y < bottom; y++) {
+                for (let x = scanFrom; x < scanTo; x++) {
+                    const i = (y * canvas.width + x) * 4;
+                    if (data[i + 3] < 40) continue;
+                    const r = data[i], g = data[i + 1], b = data[i + 2];
+                    // The head and snout are light green; the shell is darker
+                    // and sits entirely left of where we start scanning.
+                    if (g > 150 && g > r + 20 && g > b + 40) headPixels++;
+                }
+            }
+            assert(headPixels > 30 * dpr, `only ${headPixels} pixels of head visible past the shell`);
+        });
+
+        artTests.test('a tucked-in turtle shows no head', () => {
+            initLevel();
+            gameState.camera.x = 0;
+            gameState.camera.y = 0;
+            ctx.clearRect(0, 0, view.w, view.h);
+
+            const turtle = new TurtleEnemy(70, 70);
+            turtle.alive = true;
+            turtle.inShell = true;
+            turtle.velocityX = 0;
+            turtle.draw();
+
+            const dpr = canvas.width / view.w;
+            const scanFrom = Math.ceil((turtle.x + turtle.width) * dpr);
+            const scanTo = Math.min(canvas.width, scanFrom + Math.ceil(14 * dpr));
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            let stray = 0;
+            for (let y = 0; y < canvas.height; y++) {
+                for (let x = scanFrom; x < scanTo; x++) {
+                    if (data[(y * canvas.width + x) * 4 + 3] > 40) stray++;
+                }
+            }
+            assert(stray < 20 * dpr, `${stray} pixels drawn outside a tucked-in shell`);
+        });
+
+        // Test Suite 19: PWA
         const pwaTests = new TestRunner('PWA Support');
 
         pwaTests.test('Manifest link exists', () => {
@@ -939,6 +1048,7 @@
                 shadowTests,
                 hitboxTests,
                 populationTests,
+                artTests,
                 pwaTests
             ];
 
