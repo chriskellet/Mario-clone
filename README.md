@@ -46,6 +46,8 @@ and whatever is left on the clock is converted into a time bonus.
   standing on top of it.
 - **Power-ups** — a mushroom makes you big (one free hit and the ability to
   smash bricks); a star makes you briefly invincible and lethal on contact.
+  Like everything else that walks, a loose power-up turns back at a drop
+  instead of throwing itself into the pit a second after you earned it.
 - **Coins** — 50 points each, and every 100 coins is an extra life.
 - **Pits and the clock** — falling into a gap or running the timer out costs a
   life regardless of size.
@@ -117,14 +119,16 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 80 checks covering
+Open `tests.html` in a browser to run the test suite — 83 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, level geometry (no overlapping solids, no impassable gaps,
 every tier reachable, every pit jumpable), block and power-up behaviour, and the
 death and respawn sequence, enemy behaviour at ledges, enemy population
 limits, fair spawning, hitbox fidelity against the rendered sprite, enemy
-artwork (the turtle's head is scanned for in the rendered frame), and shadow
-casting, alongside DOM and configuration checks.
+artwork (the turtle's head and neck are scanned for in the rendered frame),
+power-up safety (a loose power-up turns at a ledge, and every power-up block
+has a runway before the next pit), and shadow casting, alongside DOM and
+configuration checks.
 
 Built with:
 
