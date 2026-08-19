@@ -3065,12 +3065,21 @@ class TurtleEnemy extends Enemy {
         ctx.lineTo(cx + 9 - legSwing, screenY + this.height - 2);
         ctx.stroke();
 
-        // Shell first, then the head on top of it. Painting the shell last
-        // buried all but a few pixels of the head behind it.
+        // Body parts stack back to front: neck, then shell over its root, then
+        // the head in front. Drawing the neck after the shell made it look
+        // like it sprouted from the middle of the shell.
         const shellCX = cx - look * 5;
         const shellCY = screenY + this.height * 0.5;
         const shellRX = this.width / 2.7;
         const shellRY = this.height / 2.7;
+        const headX = cx + look * 11;
+        const headY = screenY + this.height * 0.42;
+
+        // Neck - the inner end is hidden by the shell painted over it
+        ctx.fillStyle = '#7CB342';
+        ctx.beginPath();
+        ctx.roundRect(Math.min(shellCX, headX), headY - 3.5, Math.abs(headX - shellCX), 7, 3.5);
+        ctx.fill();
 
         const shellGradient = ctx.createRadialGradient(shellCX - 4, shellCY - 6, 2, shellCX, shellCY, shellRX * 1.4);
         shellGradient.addColorStop(0, '#4CAF50');
@@ -3092,14 +3101,8 @@ class TurtleEnemy extends Enemy {
             ctx.fill();
         }
 
-        // Neck, then head, clear of the shell's leading edge
-        const headX = cx + look * 11;
-        const headY = screenY + this.height * 0.42;
+        // Head, clear of the shell's leading edge
         ctx.fillStyle = '#8BC34A';
-        ctx.beginPath();
-        ctx.roundRect(Math.min(shellCX, headX), headY - 3.5, Math.abs(headX - shellCX), 7, 3);
-        ctx.fill();
-
         ctx.beginPath();
         ctx.ellipse(headX, headY, 7.5, 6.5, 0, 0, Math.PI * 2);
         ctx.fill();
@@ -3402,6 +3405,14 @@ class PowerUp {
 
         const hit = moveAndCollide(this);
         if (hit.hitWall !== 0) this.velocityX = -this.velocityX;
+
+        // Turn back at a drop rather than walking off it. A power-up that
+        // throws itself into a pit a second after you earned it is just a
+        // reward taken away again.
+        if (this.onGround && this.velocityX !== 0 &&
+            !hasFloorAhead(this, Math.sign(this.velocityX))) {
+            this.velocityX = -this.velocityX;
+        }
 
         // Stars bounce along; mushrooms just walk.
         if (this.type === 'star' && this.onGround) {
@@ -4151,10 +4162,16 @@ const CLOUD_LAYOUT = [
 
 // Rows of blocks at head height, in bands clear of the platforms above them
 const BLOCK_ROWS = [
-    { x: 120, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
-    { x: 760, items: [['question', 'mushroom']] },
+    // The first mushroom sits in a pocket: a power-up released here walks
+    // right into the pipe at x=460 and back into the world edge, so it can
+    // never reach the pit at 840. The block by that pit holds a coin instead,
+    // which stays put.
+    { x: 120, items: [['brick', null], ['question', 'mushroom'], ['brick', null]] },
+    { x: 760, items: [['question', 'coin']] },
+    // The star sat 80px from the pit at 1680; from here it has 640px of run.
+    { x: 960, items: [['question', 'star'], ['brick', null]] },
     { x: 1280, items: [['brick', null], ['question', 'coin', 3], ['brick', null]] },
-    { x: 1560, items: [['question', 'star'], ['brick', null]] },
+    { x: 1560, items: [['brick', null], ['question', 'coin']] },
     { x: 2400, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
     { x: 2680, items: [['question', 'mushroom'], ['brick', null]] },
 ];

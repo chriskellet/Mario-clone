@@ -991,6 +991,39 @@
             assert(headPixels > 30 * dpr, `only ${headPixels} pixels of head visible past the shell`);
         });
 
+        artTests.test('a walking turtle\'s neck does not cross its shell', () => {
+            initLevel();
+            gameState.camera.x = 0;
+            gameState.camera.y = 0;
+            ctx.clearRect(0, 0, view.w, view.h);
+
+            const turtle = new TurtleEnemy(70, 70);
+            turtle.alive = true;
+            turtle.inShell = false;
+            turtle.velocityX = 1;                       // facing right
+            turtle.draw();
+
+            const dpr = canvas.width / view.w;
+            const centreX = turtle.x + turtle.width / 2;
+            const shellCX = centreX - 5;
+            const shellCY = turtle.y + turtle.height * 0.5;
+
+            // Sample a column straight through the middle of the shell. The
+            // neck used to be painted over it, showing limb green where only
+            // shell should be.
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            const px = Math.round(shellCX * dpr);
+            let neckOverShell = 0;
+            for (let y = Math.round((shellCY - 6) * dpr); y < Math.round((shellCY + 6) * dpr); y++) {
+                const i = (y * canvas.width + px) * 4;
+                if (data[i + 3] < 40) continue;
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                // Neck green (#7CB342) is markedly lighter than the shell body
+                if (g > 165 && r > 105 && r < 145 && b < 90) neckOverShell++;
+            }
+            assert(neckOverShell === 0, `${neckOverShell} pixels of neck drawn across the shell centre`);
+        });
+
         artTests.test('a tucked-in turtle shows no head', () => {
             initLevel();
             gameState.camera.x = 0;
@@ -1016,7 +1049,51 @@
             assert(stray < 20 * dpr, `${stray} pixels drawn outside a tucked-in shell`);
         });
 
-        // Test Suite 19: PWA
+        // Test Suite 19: Power-up safety
+        const powerUpTests = new TestRunner('Power-up Safety');
+
+        powerUpTests.test('a power-up turns back at a ledge', () => {
+            initLevel();
+            rebuildSolids();
+            const seg = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x)[0];
+
+            powerUps.length = 0;
+            const shroom = new PowerUp(seg.x + seg.width - 90, seg.y - CONFIG.POWERUP_SIZE, 'mushroom');
+            shroom.sproutTime = 0;
+            shroom.velocityX = CONFIG.POWERUP_SPEED;      // heading for the drop
+            powerUps.push(shroom);
+
+            let furthest = shroom.x;
+            for (let i = 0; i < 300 && !shroom.collected; i++) {
+                shroom.update();
+                furthest = Math.max(furthest, shroom.x + shroom.width);
+            }
+            assert(shroom.y < CONFIG.WORLD_HEIGHT, 'the power-up fell into the pit');
+            assert(furthest <= seg.x + seg.width + 2,
+                `it walked ${Math.round(furthest - (seg.x + seg.width))}px past the edge`);
+        });
+
+        powerUpTests.test('every mushroom block has a runway before the next pit', () => {
+            initLevel();
+            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+            const tight = [];
+
+            for (const row of BLOCK_ROWS) {
+                row.items.forEach(([, contents], i) => {
+                    if (contents !== 'mushroom' && contents !== 'star') return;
+                    const x = row.x + i * GRID;
+                    const seg = ground.find(g => x >= g.x && x < g.x + g.width);
+                    if (!seg) { tight.push(`${contents}@${x} is not over ground`); return; }
+                    // Power-ups walk right, so the run to the end of this
+                    // stretch of ground is what matters.
+                    const runway = (seg.x + seg.width) - (x + GRID);
+                    if (runway < 200) tight.push(`${contents}@${x} has only ${runway}px before the drop`);
+                });
+            }
+            assert(tight.length === 0, tight.join(', '));
+        });
+
+        // Test Suite 20: PWA
         const pwaTests = new TestRunner('PWA Support');
 
         pwaTests.test('Manifest link exists', () => {
@@ -1049,6 +1126,7 @@
                 hitboxTests,
                 populationTests,
                 artTests,
+                powerUpTests,
                 pwaTests
             ];
 
