@@ -41,23 +41,34 @@ const CONFIG = {
     CAMERA_GROUND_BIAS: 40,   // Keeps the ground clear of the touch buttons
 
     // --- Collision courtesies ---
-    CORNER_CORRECTION: 10,    // Slide past a block corner clipped by this much
+    CORNER_CORRECTION: 7,     // Slide past a block corner clipped by this much
     SHADOW_FADE_DISTANCE: 260, // Height at which a cast shadow fades out
 
     // --- Entities ---
-    PLAYER_SIZE: 40,
+    PLAYER_SIZE: 40,           // Drawing size and the level's grid cell
+    // The artwork is 28x45 for big and 22x34 for small (measured off the
+    // rendered sprite). The collision box used to be a flat 40 wide, so a
+    // third of big Mario - and nearly half of small Mario - was empty air that
+    // still bumped blocks and enemies. These are the real, visible bounds.
+    PLAYER_WIDTH: 28,
+    SMALL_PLAYER_WIDTH: 22,
     SMALL_PLAYER_HEIGHT: 30,   // Small Mario really is shorter, hitbox included
     ENEMY_SIZE: 35,
     COIN_SIZE: 25,
     BLOCK_SIZE: 40,
+    BLOCK_BUMP_SPEED: -9,      // Sharper pop so the hit reads on contact
+    BLOCK_BUMP_GRAVITY: 2.6,
+    BLOCK_FLASH_FRAMES: 5,
     POWERUP_SIZE: 30,
     POWERUP_SPEED: 2,
     PORTAL_WIDTH: 60,
     PORTAL_HEIGHT: 60,
     JUMPER_JUMP_POWER: -9,
     STAR_DURATION: 600,        // 10 seconds of invincibility
-    ENEMY_RESPAWN_MS: 6000,
-    MAX_ENEMIES_PER_TYPE: 5,
+    ENEMY_RESPAWN_MS: 8000,
+    MAX_ENEMIES_PER_TYPE: 3,
+    PORTAL_SPAWN_MIN: 900,     // 15s between spawns at the very least
+    PORTAL_SPAWN_RANGE: 600,   // ...up to 25s
     enemySpeedScale: 1,        // Raised each level by initLevel()
 
     // --- World ---
@@ -1510,7 +1521,7 @@ class Player {
     constructor(x, y, colorPalette = null) {
         this.x = x;
         this.y = y;
-        this.width = CONFIG.PLAYER_SIZE;
+        this.width = CONFIG.PLAYER_WIDTH;
         this.height = CONFIG.PLAYER_SIZE;
         this.velocityX = 0;
         this.velocityY = 0;
@@ -1565,19 +1576,37 @@ class Player {
         if (next === this._health) return;
 
         const newHeight = next > 1 ? CONFIG.PLAYER_SIZE : CONFIG.SMALL_PLAYER_HEIGHT;
+        const newWidth = next > 1 ? CONFIG.PLAYER_WIDTH : CONFIG.SMALL_PLAYER_WIDTH;
         this.y += this.height - newHeight;
+        this.x += (this.width - newWidth) / 2;   // keep the sprite centred
         this.height = newHeight;
+        this.width = newWidth;
         this._health = next;
 
         if (newHeight > CONFIG.SMALL_PLAYER_HEIGHT) this.pushOutOfSolids();
     }
 
-    /** Nudges the player downwards until nothing is overlapping its head. */
+    /**
+     * Frees the player from anything it is inside, taking the shortest way out.
+     * Growing widens the box by 3px on each side as well as raising it, so a
+     * mushroom grabbed against a pipe can leave the player in a wall, not just
+     * in a ceiling.
+     */
     pushOutOfSolids() {
-        for (let attempt = 0; attempt < CONFIG.PLAYER_SIZE; attempt++) {
+        for (let attempt = 0; attempt < 24; attempt++) {
             const stuck = solidCache.find(solid => !solid.oneWay && overlaps(this, solid));
             if (!stuck) return;
-            this.y += 2;
+
+            const outLeft = (stuck.x - this.width) - this.x;        // negative
+            const outRight = (stuck.x + stuck.width) - this.x;      // positive
+            const outDown = (stuck.y + stuck.height) - this.y;      // positive
+            const shortestX = Math.abs(outLeft) < Math.abs(outRight) ? outLeft : outRight;
+
+            if (Math.abs(shortestX) < Math.abs(outDown)) {
+                this.x += shortestX + Math.sign(shortestX) * 0.5;
+            } else {
+                this.y += outDown + 0.5;
+            }
         }
     }
 
@@ -2029,9 +2058,14 @@ class Player {
             const timeSinceUpdate = now - (remotePlayer.timestamp || 0);
             if (timeSinceUpdate > afkThreshold) return;
 
-            const collision = this.x < remotePlayer.x + CONFIG.PLAYER_SIZE &&
+            const otherWidth = (remotePlayer.health === undefined ? 2 : remotePlayer.health) > 1
+                ? CONFIG.PLAYER_WIDTH : CONFIG.SMALL_PLAYER_WIDTH;
+            const otherHeight = (remotePlayer.health === undefined ? 2 : remotePlayer.health) > 1
+                ? CONFIG.PLAYER_SIZE : CONFIG.SMALL_PLAYER_HEIGHT;
+
+            const collision = this.x < remotePlayer.x + otherWidth &&
                             this.x + this.width > remotePlayer.x &&
-                            this.y < remotePlayer.y + CONFIG.PLAYER_SIZE &&
+                            this.y < remotePlayer.y + otherHeight &&
                             this.y + this.height > remotePlayer.y;
 
             if (!collision) return;
@@ -2046,17 +2080,13 @@ class Player {
             if (this.invulnerable) return;
 
             // Are we jumping on them? That is the only way to deal damage.
-            if (this.velocityY > 0 && this.y < remotePlayer.y + CONFIG.PLAYER_SIZE / 2) {
+            if (this.velocityY > 0 && this.y < remotePlayer.y + otherHeight / 2) {
                 this.velocityY = CONFIG.STOMP_BOUNCE;
                 this.isJumping = false;
 
                 multiplayer.sendHitClaim(playerId, this.x, this.y, remotePlayer.x, remotePlayer.y);
 
-                this.awardCombo(
-                    remotePlayer.x + CONFIG.PLAYER_SIZE / 2,
-                    remotePlayer.y,
-                    200
-                );
+                this.awardCombo(remotePlayer.x + otherWidth / 2, remotePlayer.y, 200);
 
                 sounds.stomp();
                 haptics.success();
@@ -2065,11 +2095,11 @@ class Player {
                 // Solid collision - no damage, just block each other
                 const overlapX = Math.min(
                     this.x + this.width - remotePlayer.x,
-                    remotePlayer.x + CONFIG.PLAYER_SIZE - this.x
+                    remotePlayer.x + otherWidth - this.x
                 );
                 const overlapY = Math.min(
                     this.y + this.height - remotePlayer.y,
-                    remotePlayer.y + CONFIG.PLAYER_SIZE - this.y
+                    remotePlayer.y + otherHeight - this.y
                 );
 
                 if (overlapX < overlapY) {
@@ -2080,7 +2110,7 @@ class Player {
                     this.velocityY = 0;
                     this.onGround = true;
                 } else if (this.velocityY < 0 && this.y > remotePlayer.y) {
-                    this.y = remotePlayer.y + CONFIG.PLAYER_SIZE;
+                    this.y = remotePlayer.y + otherHeight;
                     this.velocityY = 0;
                 }
             }
@@ -2378,15 +2408,16 @@ function drawRemotePlayer(playerData) {
 
     const remoteBig = (playerData.health === undefined ? 2 : playerData.health) > 1;
     const remoteHeight = remoteBig ? CONFIG.PLAYER_SIZE : CONFIG.SMALL_PLAYER_HEIGHT;
+    const remoteWidth = remoteBig ? CONFIG.PLAYER_WIDTH : CONFIG.SMALL_PLAYER_WIDTH;
     drawGroundShadow(
-        { x, y, width: CONFIG.PLAYER_SIZE, height: remoteHeight },
-        screenX + CONFIG.PLAYER_SIZE / 2
+        { x, y, width: remoteWidth, height: remoteHeight },
+        screenX + remoteWidth / 2
     );
 
     drawMarioSprite(ctx, {
         x: screenX,
         y: screenY,
-        width: CONFIG.PLAYER_SIZE,
+        width: remoteWidth,
         height: remoteHeight,
         big: remoteBig,
         direction: playerData.direction || 1,
@@ -2407,22 +2438,23 @@ function drawRemotePlayer(playerData) {
     ctx.font = 'bold 10px "Trebuchet MS", Arial, sans-serif';
     ctx.textAlign = 'center';
     const labelWidth = Math.max(40, ctx.measureText(name).width + 12);
+    const labelCentre = screenX + remoteWidth / 2;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
     ctx.beginPath();
-    ctx.roundRect(screenX + CONFIG.PLAYER_SIZE / 2 - labelWidth / 2, screenY - 17, labelWidth, 14, 4);
+    ctx.roundRect(labelCentre - labelWidth / 2, screenY - 17, labelWidth, 14, 4);
     ctx.fill();
     ctx.fillStyle = 'white';
-    ctx.fillText(name, screenX + CONFIG.PLAYER_SIZE / 2, screenY - 7);
+    ctx.fillText(name, labelCentre, screenY - 7);
 
     // AFK indicator
     if (isAFK) {
         ctx.fillStyle = 'rgba(220, 40, 40, 0.85)';
         ctx.beginPath();
-        ctx.roundRect(screenX + CONFIG.PLAYER_SIZE / 2 - 16, screenY - 33, 32, 13, 4);
+        ctx.roundRect(labelCentre - 16, screenY - 33, 32, 13, 4);
         ctx.fill();
         ctx.fillStyle = 'white';
         ctx.font = 'bold 9px "Trebuchet MS", Arial, sans-serif';
-        ctx.fillText('AFK', screenX + CONFIG.PLAYER_SIZE / 2, screenY - 24);
+        ctx.fillText('AFK', labelCentre, screenY - 24);
     }
 
     ctx.restore();
@@ -2587,16 +2619,15 @@ class Enemy {
         }
     }
 
-    /** Gone for good (fell in a pit) - no respawn, no points. */
+    /**
+     * Gone for good (fell in a pit) - no respawn, no points. Respawning these
+     * turned every pit into a conveyor: an enemy fell in, came back at its
+     * spawn point, walked in again, while the pipe added more on top.
+     */
     despawn() {
         this.alive = false;
         this.deathTimer = 0;
-        this.respawnTime = multiplayerState.connected ? null : Date.now() + CONFIG.ENEMY_RESPAWN_MS;
-        if (this.respawnTime) {
-            // Come back where it started rather than at the bottom of the pit.
-            this.x = this.spawnX === undefined ? this.x : this.spawnX;
-            this.y = this.spawnY === undefined ? 0 : this.spawnY;
-        }
+        this.respawnTime = null;
         if (multiplayerState.connected && this.id) multiplayer.removeEnemy(this.id);
     }
 
@@ -2713,8 +2744,16 @@ class JumpingEnemy extends Enemy {
         this.color = '#FF6B6B'; // Red color to distinguish from regular enemies
         this.scoreValue = 150;
         this.velocityX = -2.4 * (CONFIG.enemySpeedScale || 1);
-        this.turnsAtLedges = false; // It can hop across gaps
         this.squash = 1;
+    }
+
+    /**
+     * Hoppers used to ignore ledges so they could clear gaps. In practice they
+     * queued up at the nearest pit and threw themselves in, and the pipe kept
+     * feeding replacements. They now respect edges like everything else.
+     */
+    avoidsLedges() {
+        return true;
     }
 
     behave() {
@@ -3088,14 +3127,16 @@ class Block {
         this.destroyed = false;
         this.bump = 0;       // Vertical offset of the bump animation
         this.bumpVelocity = 0;
+        this.flash = 0;      // Frames of contact highlight
         this.animTime = Math.random() * 100;
     }
 
     update() {
         this.animTime++;
+        if (this.flash > 0) this.flash--;
         if (this.bump !== 0 || this.bumpVelocity !== 0) {
             this.bump += this.bumpVelocity;
-            this.bumpVelocity += 1.4;
+            this.bumpVelocity += CONFIG.BLOCK_BUMP_GRAVITY;
             if (this.bump >= 0) {
                 this.bump = 0;
                 this.bumpVelocity = 0;
@@ -3152,7 +3193,19 @@ class Block {
 
     startBump() {
         this.bump = -1;
-        this.bumpVelocity = -7;
+        this.bumpVelocity = CONFIG.BLOCK_BUMP_SPEED;
+        this.flash = CONFIG.BLOCK_FLASH_FRAMES;
+
+        // A puff along the underside at the instant of contact, so the hit
+        // reads immediately rather than only once the block has travelled.
+        const cy = this.y + this.height;
+        for (let i = 0; i < 5; i++) {
+            spawnParticle(new Particle(
+                this.x + 6 + Math.random() * (this.width - 12), cy,
+                (Math.random() - 0.5) * 3, 0.6 + Math.random(),
+                'rgba(255,255,255,0.85)', 2 + Math.random() * 2, 12, 0.06
+            ));
+        }
     }
 
     releaseContents(byPlayer) {
@@ -3211,6 +3264,16 @@ class Block {
         if (screenX < -60 || screenX > view.w + 60) return;
 
         ctx.save();
+
+        if (this.flash > 0) {
+            ctx.save();
+            ctx.globalAlpha = (this.flash / CONFIG.BLOCK_FLASH_FRAMES) * 0.9;
+            ctx.fillStyle = '#FFFFFF';
+            ctx.beginPath();
+            ctx.roundRect(screenX - 3, screenY - 3, this.width + 6, this.height + 6, 6);
+            ctx.fill();
+            ctx.restore();
+        }
 
         if (this.type === 'question' && !this.used) {
             const pulse = 0.5 + Math.sin(this.animTime * 0.08) * 0.5;
@@ -3521,7 +3584,7 @@ class Portal {
         this.width = CONFIG.PORTAL_WIDTH;
         this.height = CONFIG.PORTAL_HEIGHT;
         this.enemyType = enemyType; // 'normal', 'jumping', or 'turtle'
-        this.spawnCooldown = 180 + Math.random() * 180; // 3-6 seconds startup delay
+        this.spawnCooldown = 300 + Math.random() * 300; // 5-10 seconds startup delay
         this.animation = 0;
         this.spawning = false; // Spawning animation state
         this.spawnProgress = 0; // 0 to 1
@@ -3548,7 +3611,7 @@ class Portal {
                 sounds.sprout();
                 this.spawning = false;
                 this.spawnProgress = 0;
-                this.spawnCooldown = 420 + Math.random() * 300; // 7-12 seconds between spawns
+                this.spawnCooldown = CONFIG.PORTAL_SPAWN_MIN + Math.random() * CONFIG.PORTAL_SPAWN_RANGE;
             }
             return;
         }
