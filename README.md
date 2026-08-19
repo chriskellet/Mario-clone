@@ -63,6 +63,39 @@ on a live leaderboard, and can stomp each other. Pipes spawn enemies under a
 single elected spawn master so everyone sees the same world. If Firebase is
 blocked or offline the game falls back to single player automatically.
 
+### Firebase setup
+
+Multiplayer needs two things configured on the Firebase project, both under
+[console.firebase.google.com](https://console.firebase.google.com):
+
+1. **Authentication → Sign-in method → Anonymous → enable.** Clients sign in
+   anonymously before connecting, and the database rules key on the resulting
+   `auth.uid`. With the provider disabled, sign-in fails and every client stays
+   in single player.
+2. **Realtime Database → Rules → paste `database.rules.json`** (or
+   `firebase deploy --only database`). The default test-mode rules expire 30
+   days after they are created, after which every read and write is denied and
+   multiplayer silently stops working for everybody.
+
+Anonymous auth is not a gate on who can play — anyone holding the public web
+config can mint a token. It is there so each player has a server-verified
+identity, which is what lets the rules stop one client writing another's score
+or wiping the world. It also leaves room to add Google or email sign-in later:
+an anonymous account can be upgraded in place with `linkWithCredential`, keeping
+the same uid and everything attached to it.
+
+### Spawn master
+
+One client is elected to spawn enemies, write their positions and tidy up
+abandoned players. The election is a pure function of the player list that every
+client evaluates independently — no lock node, no election messages, no polling:
+the longest-standing player that has checked in within the last 15 seconds wins.
+Clean departures are instant because `onDisconnect()` removes the player node
+server-side; the activity window is the backstop for a tab that is frozen or on
+a dead network but still nominally connected. Timestamps are compared against
+Firebase's server-corrected clock, so a device with a badly set clock cannot
+decide everyone else is asleep and seize the role.
+
 ## Engine notes
 
 - **Fixed timestep.** The simulation runs at exactly 60Hz through an accumulator
