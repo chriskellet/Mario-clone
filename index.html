@@ -59,7 +59,8 @@
             <div class="hud-group">
                 <div class="hud-item combo hidden"><span id="combo">1x</span></div>
                 <div class="hud-item level"><span class="hud-label">World</span><span id="level">1</span></div>
-                <div class="hud-item time"><span class="hud-label">Time</span><span id="time">300</span></div>
+                <div class="hud-item mode hidden"><span id="round-mode">Territory</span></div>
+                <div class="hud-item time"><span class="hud-label" id="time-label">Time</span><span id="time">300</span></div>
                 <button id="btn-pause" class="icon-btn" aria-label="Pause">❚❚</button>
                 <button id="btn-mute" class="icon-btn" aria-label="Mute">🔊</button>
             </div>
@@ -143,12 +144,12 @@
             console.warn('Firebase SDK did not load - running in single player.');
         }
     </script>
-    <script src="game.js?v=5"></script>
+    <script src="game.js?v=6"></script>
     <script>
         // Register service worker for PWA support with auto-update
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js?v=5')
+                navigator.serviceWorker.register('sw.js?v=6')
                     .then(reg => {
                         console.log('Service Worker registered');
 

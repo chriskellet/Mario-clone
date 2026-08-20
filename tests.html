@@ -335,48 +335,126 @@
         });
 
         // Test Suite 9: Level construction
+        // Every check below runs against every level in the campaign, not just
+        // the first one: a stage that is only ever reached on the fourth clear
+        // is exactly the one nobody plays by hand before shipping.
         const levelTests = new TestRunner('Level Construction');
 
-        levelTests.test('initLevel builds a populated level', () => {
-            initLevel();
-            assert(platforms.length > 10, 'not enough platforms');
-            assert(blocks.length > 0, 'no blocks');
-            assert(coins.length > 0, 'no coins');
-            assert(portals.length > 0, 'no enemy pipes');
-            assert(enemies.length > 0, 'no enemies in single player');
-            assert(flagpole, 'no flagpole in single player');
+        /** Builds each level in turn and hands it to fn(design, label). */
+        function eachLevel(fn) {
+            const restore = gameState.level;
+            try {
+                for (let i = 0; i < LEVELS.length; i++) {
+                    gameState.level = i + 1;
+                    initLevel();
+                    fn(LEVELS[i], worldLabel(i + 1));
+                }
+            } finally {
+                gameState.level = restore;
+                initLevel();
+            }
+        }
+
+        levelTests.test('the campaign has several distinct levels', () => {
+            assert(LEVELS.length >= 5, `only ${LEVELS.length} levels in the campaign`);
+            const names = new Set(LEVELS.map(l => l.name));
+            assertEqual(names.size, LEVELS.length, 'two levels share a name');
+            const themes = new Set(LEVELS.map(l => l.theme));
+            assert(themes.size >= 4, `only ${themes.size} distinct settings across the campaign`);
+            LEVELS.forEach(l => assert(THEMES[l.theme], `${l.name} uses unknown theme ${l.theme}`));
         });
 
-        levelTests.test('the level is deterministic so multiplayer stays in sync', () => {
-            initLevel();
-            const first = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
-            initLevel();
-            const second = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
-            assertEqual(first, second, 'coin layout differs between builds');
+        levelTests.test('the world number counts levels and laps', () => {
+            assertEqual(worldLabel(1), '1-1', 'first level should be 1-1');
+            assertEqual(worldLabel(LEVELS.length), `1-${LEVELS.length}`, 'last level of lap one');
+            assertEqual(worldLabel(LEVELS.length + 1), '2-1', 'the campaign should loop into lap 2');
+        });
+
+        levelTests.test('initLevel builds a populated level', () => {
+            eachLevel((design, label) => {
+                assert(platforms.length > 6, `${label} has only ${platforms.length} platforms`);
+                assert(blocks.length > 0, `${label} has no blocks`);
+                assert(coins.length > 0, `${label} has no coins`);
+                assert(portals.length > 0, `${label} has no enemy pipes`);
+                assert(enemies.length > 0, `${label} has no enemies in single player`);
+                assert(flagpole, `${label} has no flagpole`);
+                assertEqual(CONFIG.WORLD_WIDTH, design.width, `${label} did not size the world`);
+                assert(design.flag < design.width, `${label} puts the flag outside the world`);
+            });
+        });
+
+        levelTests.test('each level is deterministic so multiplayer stays in sync', () => {
+            eachLevel((design, label) => {
+                const first = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
+                initLevel();
+                const second = coins.map(c => `${Math.round(c.x)},${Math.round(c.y)}`).join('|');
+                assertEqual(first, second, `${label} coin layout differs between builds`);
+            });
         });
 
         levelTests.test('coin indices are unique', () => {
-            initLevel();
-            const seen = new Set(coins.map(c => c.index));
-            assertEqual(seen.size, coins.length, 'duplicate coin indices would break Firebase claims');
+            eachLevel((design, label) => {
+                const seen = new Set(coins.map(c => c.index));
+                assertEqual(seen.size, coins.length, `${label} has duplicate coin indices`);
+            });
         });
 
         levelTests.test('the ground has gaps to fall into', () => {
-            initLevel();
-            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
-            assert(ground.length > 1, 'ground should be split into segments');
-            const hasGap = ground.some((seg, i) => i > 0 && seg.x > ground[i - 1].x + ground[i - 1].width);
-            assert(hasGap, 'no pits found in the level');
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                assert(ground.length > 1, `${label} ground should be split into segments`);
+                const hasGap = ground.some((seg, i) => i > 0 && seg.x > ground[i - 1].x + ground[i - 1].width);
+                assert(hasGap, `${label} has no pits`);
+            });
+        });
+
+        levelTests.test('the world is wide enough to hold the level', () => {
+            eachLevel((design, label) => {
+                const ground = design.ground[design.ground.length - 1];
+                assertEqual(ground[0] + ground[1], design.width,
+                    `${label} ground does not reach the end of the world`);
+                assert(design.ground[0][0] === 0, `${label} has no ground under the spawn point`);
+            });
         });
 
         levelTests.test('respawn points are never over a pit', () => {
-            initLevel();
-            for (let i = 0; i < 40; i++) {
-                const spot = player.getRandomRespawnLocation();
-                const supported = platforms.some(p =>
-                    spot.x + player.width > p.x && spot.x < p.x + p.width && p.y >= spot.y);
-                assert(supported, `respawn at ${Math.round(spot.x)} has nothing below it`);
-            }
+            eachLevel((design, label) => {
+                for (let i = 0; i < 40; i++) {
+                    const spot = player.getRandomRespawnLocation();
+                    const supported = platforms.some(p =>
+                        spot.x + player.width > p.x && spot.x < p.x + p.width && p.y >= spot.y);
+                    assert(supported, `${label}: respawn at ${Math.round(spot.x)} has nothing below it`);
+                }
+            });
+        });
+
+        levelTests.test('enemies and pipes start on solid footing', () => {
+            eachLevel((design, label) => {
+                rebuildSolids();
+                const stranded = [];
+                for (const enemy of enemies) {
+                    const probe = { x: enemy.x, y: enemy.y, width: enemy.width, height: enemy.height + 40 };
+                    const footing = solidCache.some(s => !s.oneWay &&
+                        s.x < probe.x + probe.width && s.x + s.width > probe.x &&
+                        s.y >= enemy.y + enemy.height - 1 && s.y < probe.y + probe.height);
+                    if (!footing) stranded.push(`enemy@${Math.round(enemy.x)}`);
+                    // Nothing should start the level embedded in a wall. Pipes
+                    // are the exception: enemies are posted in front of them on
+                    // purpose, and walk clear on the first step.
+                    const buried = solidCache.some(s =>
+                        !s.oneWay && !portals.includes(s) && overlaps(enemy, s));
+                    if (buried) stranded.push(`enemy inside a solid @${Math.round(enemy.x)}`);
+                }
+                for (const portal of portals) {
+                    const seg = platforms.find(p => p.variant === 'ground' &&
+                        portal.x >= p.x && portal.x + portal.width <= p.x + p.width);
+                    const onLedge = platforms.some(p => p.variant !== 'ground' &&
+                        Math.abs(p.y - (portal.y + portal.height)) < 1 &&
+                        portal.x >= p.x && portal.x + portal.width <= p.x + p.width);
+                    if (!seg && !onLedge) stranded.push(`pipe@${Math.round(portal.x)}`);
+                }
+                assert(stranded.length === 0, `${label}: ${stranded.slice(0, 3).join(', ')}`);
+            });
         });
 
         // Test Suite 10: Blocks and power-ups
@@ -436,7 +514,6 @@
         const geometryTests = new TestRunner('Level Geometry');
 
         function levelSolids() {
-            initLevel();
             rebuildSolids();
             return solidCache.slice();
         }
@@ -444,6 +521,7 @@
         const describe = s => `${s.variant || s.type || 'pipe'}@(${Math.round(s.x)},${Math.round(s.y)})`;
 
         geometryTests.test('no two solids occupy the same space', () => {
+            eachLevel((design, label) => {
             const solids = levelSolids();
             const clashes = [];
             for (let i = 0; i < solids.length; i++) {
@@ -453,10 +531,12 @@
                     }
                 }
             }
-            assert(clashes.length === 0, `overlapping solids: ${clashes.slice(0, 3).join(', ')}`);
+            assert(clashes.length === 0, `${label} overlapping solids: ${clashes.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('no gap is too narrow to walk into', () => {
+            eachLevel((design, label) => {
             const solids = levelSolids();
             const width = CONFIG.PLAYER_SIZE;
             const bad = [];
@@ -475,10 +555,12 @@
                     if (!filled) bad.push(`${Math.round(gap)}px at ${describe(left)}`);
                 }
             }
-            assert(bad.length === 0, `unwalkable slots: ${bad.slice(0, 3).join(', ')}`);
+            assert(bad.length === 0, `${label} unwalkable slots: ${bad.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('no tunnel is too short to fit under', () => {
+            eachLevel((design, label) => {
             const solids = levelSolids();
             const height = CONFIG.PLAYER_SIZE;
             const bad = [];
@@ -497,10 +579,12 @@
                     if (!filled) bad.push(`${Math.round(gap)}px under ${describe(top)}`);
                 }
             }
-            assert(bad.length === 0, `crawlspaces: ${bad.slice(0, 3).join(', ')}`);
+            assert(bad.length === 0, `${label} crawlspaces: ${bad.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('every exposed surface has somewhere to stand', () => {
+            eachLevel((design, label) => {
             const solids = levelSolids();
             const size = CONFIG.PLAYER_SIZE;
             const bad = [];
@@ -520,16 +604,23 @@
                 }
                 if (free === 0) bad.push(describe(surface));
             }
-            assert(bad.length === 0, `nowhere to stand on: ${bad.slice(0, 3).join(', ')}`);
+            assert(bad.length === 0, `${label} nowhere to stand on: ${bad.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('the layout sits on the grid', () => {
-            initLevel();
-            const offGrid = [...platforms, ...blocks]
-                .filter(s => s.variant !== 'cloud')
-                .filter(s => s.x % GRID !== 0 || s.width % GRID !== 0)
-                .map(describe);
-            assert(offGrid.length === 0, `off-grid: ${offGrid.slice(0, 3).join(', ')}`);
+            eachLevel((design, label) => {
+                const offGrid = [...platforms, ...blocks]
+                    .filter(s => s.variant !== 'cloud')
+                    .filter(s => {
+                        // A moving platform is judged where it was laid out,
+                        // not wherever its patrol has taken it.
+                        const x = s.homeX === undefined ? s.x : s.homeX;
+                        return x % GRID !== 0 || s.width % GRID !== 0;
+                    })
+                    .map(describe);
+                assert(offGrid.length === 0, `${label} off-grid: ${offGrid.slice(0, 3).join(', ')}`);
+            });
         });
 
         geometryTests.test('each tier is within one jump of the one below', () => {
@@ -544,16 +635,222 @@
             }
         });
 
-        geometryTests.test('every pit is jumpable', () => {
-            initLevel();
-            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
-            // A running jump hangs for roughly 50 frames at 7.2px/frame.
-            const reach = 50 * CONFIG.RUN_SPEED * 0.75;
-            for (let i = 1; i < ground.length; i++) {
-                const gap = ground[i].x - (ground[i - 1].x + ground[i - 1].width);
-                assert(gap > 0, 'ground segments should not touch');
-                assert(gap < reach, `a ${gap}px pit is wider than a ${Math.round(reach)}px jump`);
+        // A running jump hangs for roughly 50 frames at 7.2px/frame, and clears
+        // about 158px of climb. Both are kept a little short of the measured
+        // figures so no crossing is gated behind a pixel-perfect jump.
+        const jumpReach = () => 50 * CONFIG.RUN_SPEED * 0.75;
+        const JUMP_RISE = 138;
+
+        /**
+         * Everything you could land on, described by the whole stretch of world
+         * it covers. A moving platform counts along its entire patrol: the
+         * lowest point is where you can board it, the highest is where it can
+         * put you down.
+         */
+        function steppingStones() {
+            const stones = [];
+            for (const p of platforms) {
+                if (p.variant === 'ground') continue;
+                const t = p.travel || p;
+                stones.push({
+                    x0: t.x, x1: t.x + t.width,
+                    board: t.y + t.height - p.height,   // top at its lowest
+                    lift: t.y,                          // top at its highest
+                });
             }
+            for (const b of blocks) {
+                if (b.destroyed) continue;
+                stones.push({ x0: b.x, x1: b.x + b.width, board: b.y, lift: b.y });
+            }
+            return stones.sort((a, b) => a.x0 - b.x0);
+        }
+
+        geometryTests.test('every pit can be crossed', () => {
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const stones = steppingStones();
+                const reach = jumpReach();
+
+                for (let i = 1; i < ground.length; i++) {
+                    const gapStart = ground[i - 1].x + ground[i - 1].width;
+                    const gapEnd = ground[i].x;
+                    assert(gapEnd > gapStart, `${label} ground segments should not touch`);
+                    if (gapEnd - gapStart < reach) continue;        // one jump clears it
+
+                    // Otherwise it has to be bridged. Walk the stepping stones
+                    // left to right and see whether they actually get you over.
+                    let edge = gapStart;        // furthest point you can jump from
+                    let standing = GROUND_Y;    // and how high you are standing
+
+                    for (const stone of stones) {
+                        if (stone.x1 <= edge) continue;
+                        if (stone.x0 > gapEnd) break;
+                        if (stone.x0 - edge > reach) break;          // out of range
+                        if (standing - stone.board > JUMP_RISE) continue;   // out of climb
+                        edge = Math.max(edge, stone.x1);
+                        standing = Math.min(standing, stone.lift);
+                    }
+
+                    const shortfall = Math.round(gapEnd - edge - reach);
+                    assert(gapEnd - edge <= reach,
+                        `${label}: the chasm at ${gapStart} is ${shortfall}px past what a jump ` +
+                        `and its stepping stones can cover`);
+                }
+            });
+        });
+
+        geometryTests.test('nothing hangs at head height over a pit', () => {
+            // A block row over a chasm is a trap rather than a challenge: a
+            // running jump arcs straight into its side, and there is no floor
+            // below to duck along instead.
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const traps = [];
+                for (const block of blocks) {
+                    if (block.y < TIER.mid || block.y > GROUND_Y) continue;
+                    const overGround = ground.some(g =>
+                        block.x >= g.x && block.x + block.width <= g.x + g.width);
+                    if (!overGround) traps.push(describe(block));
+                }
+                assert(traps.length === 0, `${label} blocks hang over a pit: ${traps.slice(0, 3).join(', ')}`);
+            });
+        });
+
+        geometryTests.test('no wall along the ground is taller than a jump', () => {
+            // A pipe with a ledge over it and a block row over that is three
+            // legal pieces of geometry stacked into one impassable wall. What
+            // matters is the climb from one step to the next along the floor.
+            eachLevel((design, label) => {
+                const solids = levelSolids();
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const HEADROOM = 48;    // a gap smaller than this is not a way through
+                const CLIMB = 150;      // a running jump clears ~199px
+                const walls = [];
+
+                // The top of the stack sitting on the ground at this column,
+                // counting anything joined to it by a gap too small to duck into.
+                const stackTop = (x, groundY) => {
+                    const column = solids
+                        .filter(s => s.x < x + 20 && s.x + s.width > x && s.y < groundY)
+                        .sort((a, b) => b.y - a.y);
+                    let top = groundY;
+                    for (const s of column) {
+                        if (s.y + s.height < top - HEADROOM) break;   // a passage opens up
+                        top = Math.min(top, s.y);
+                    }
+                    return top;
+                };
+
+                for (const segment of ground) {
+                    let previous = segment.y;
+                    for (let x = segment.x; x < segment.x + segment.width - 20; x += 20) {
+                        const top = stackTop(x, segment.y);
+                        if (previous - top > CLIMB) {
+                            walls.push(`${Math.round(previous - top)}px step up at ${x}`);
+                        }
+                        previous = top;
+                    }
+                }
+                assert(walls.length === 0, `${label}: ${walls.slice(0, 3).join(', ')}`);
+            });
+        });
+
+        geometryTests.test('moving platforms never run into the scenery', () => {
+            eachLevel((design, label) => {
+                rebuildSolids();
+                const clashes = [];
+                for (const mover of movers) {
+                    const swept = mover.travel;
+                    for (const solid of solidCache) {
+                        if (solid === mover) continue;
+                        if (overlaps(swept, solid)) clashes.push(`${describe(mover)} into ${describe(solid)}`);
+                    }
+                }
+                assert(clashes.length === 0, `${label}: ${clashes.slice(0, 3).join(', ')}`);
+            });
+        });
+
+        geometryTests.test('moving platforms stay inside the world', () => {
+            eachLevel((design, label) => {
+                for (const mover of movers) {
+                    const swept = mover.travel;
+                    assert(swept.x >= 0 && swept.x + swept.width <= CONFIG.WORLD_WIDTH,
+                        `${label}: ${describe(mover)} travels outside the world`);
+                    assert(swept.y > 40 && swept.y + swept.height < CONFIG.WORLD_HEIGHT + 40,
+                        `${label}: ${describe(mover)} travels off the top or bottom`);
+                }
+            });
+        });
+
+        geometryTests.test('hazards sit on the level, not floating in it', () => {
+            eachLevel((design, label) => {
+                rebuildSolids();
+                for (const hazard of hazards) {
+                    assert(hazard.x >= 0 && hazard.x + hazard.width <= CONFIG.WORLD_WIDTH,
+                        `${label}: hazard at ${hazard.x} is outside the world`);
+                    if (hazard.variant !== 'spikes') continue;
+                    // Spikes are stood on, so they need a floor under them.
+                    const floor = solidCache.some(s => !s.oneWay &&
+                        s.x <= hazard.x && s.x + s.width >= hazard.x + hazard.width &&
+                        Math.abs(s.y - (hazard.y + hazard.height)) < 2);
+                    assert(floor, `${label}: spikes at ${hazard.x} have no floor under them`);
+                }
+                for (const spring of springs) {
+                    const floor = solidCache.some(s => !s.oneWay &&
+                        s.x <= spring.x && s.x + s.width >= spring.x + spring.width &&
+                        Math.abs(s.y - (spring.y + spring.height)) < 2);
+                    assert(floor, `${label}: the bounce pad at ${spring.x} is floating`);
+                }
+            });
+        });
+
+        geometryTests.test('bounce pads have room to bounce and land', () => {
+            // A pad at the lip of a chasm launches you 400px up and drops you
+            // into it on the way down, and a pad under a ledge just bonks.
+            eachLevel((design, label) => {
+                rebuildSolids();
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const bad = [];
+
+                for (const spring of springs) {
+                    const segment = ground.find(g =>
+                        spring.x >= g.x && spring.x + spring.width <= g.x + g.width);
+                    if (!segment) { bad.push(`pad at ${spring.x} is not on the ground`); continue; }
+
+                    // A pad inside a pipe is a pad nobody can ever stand on.
+                    const inside = solidCache.find(s => s !== segment && overlaps(spring, s));
+                    if (inside) bad.push(`pad at ${spring.x} is buried in ${describe(inside)}`);
+
+                    const before = spring.x - segment.x;
+                    const after = (segment.x + segment.width) - (spring.x + spring.width);
+                    // The world's own edges are walls, not pits.
+                    if (segment.x > 0 && before < 120) bad.push(`pad at ${spring.x} is ${before}px from the drop behind it`);
+                    if (segment.x + segment.width < CONFIG.WORLD_WIDTH && after < 120) {
+                        bad.push(`pad at ${spring.x} is ${after}px from the drop ahead of it`);
+                    }
+
+                    // One-way ledges do not count: you bounce straight through.
+                    const ceiling = solidCache
+                        .filter(s => !s.oneWay && s.x < spring.x + spring.width && s.x + s.width > spring.x)
+                        .filter(s => s.y + s.height <= spring.y + 1)
+                        .reduce((lowest, s) => Math.max(lowest, s.y + s.height), -Infinity);
+                    const headroom = ceiling === -Infinity ? Infinity : spring.y - ceiling;
+                    if (headroom < 200) bad.push(`pad at ${spring.x} has only ${Math.round(headroom)}px of headroom`);
+                }
+                assert(bad.length === 0, `${label}: ${bad.slice(0, 3).join(', ')}`);
+            });
+        });
+
+        geometryTests.test('lava fills a pit rather than blocking the path', () => {
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                for (const hazard of hazards) {
+                    if (hazard.variant !== 'lava') continue;
+                    const onGround = ground.some(g =>
+                        hazard.x < g.x + g.width && hazard.x + hazard.width > g.x);
+                    assert(!onGround, `${label}: lava at ${hazard.x} overlaps a walkable stretch`);
+                }
+            });
         });
 
         // Test Suite 12: Death and respawn
@@ -1076,23 +1373,136 @@
         });
 
         powerUpTests.test('every mushroom block has a runway before the next pit', () => {
-            initLevel();
-            const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
-            const tight = [];
+            eachLevel((design, label) => {
+                const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
+                const tight = [];
 
-            for (const row of BLOCK_ROWS) {
-                row.items.forEach(([, contents], i) => {
-                    if (contents !== 'mushroom' && contents !== 'star') return;
-                    const x = row.x + i * GRID;
-                    const seg = ground.find(g => x >= g.x && x < g.x + g.width);
-                    if (!seg) { tight.push(`${contents}@${x} is not over ground`); return; }
-                    // Power-ups walk right, so the run to the end of this
-                    // stretch of ground is what matters.
-                    const runway = (seg.x + seg.width) - (x + GRID);
-                    if (runway < 200) tight.push(`${contents}@${x} has only ${runway}px before the drop`);
-                });
+                for (const row of design.blocks || []) {
+                    row.items.forEach(([, contents], i) => {
+                        if (contents !== 'mushroom' && contents !== 'star') return;
+                        const x = row.x + i * GRID;
+                        const seg = ground.find(g => x >= g.x && x < g.x + g.width);
+                        if (!seg) { tight.push(`${contents}@${x} is not over ground`); return; }
+                        // Power-ups walk right, so the run to the end of this
+                        // stretch of ground is what matters.
+                        const runway = (seg.x + seg.width) - (x + GRID);
+                        if (runway < 200) tight.push(`${contents}@${x} has only ${runway}px before the drop`);
+                    });
+                }
+                assert(tight.length === 0, `${label}: ${tight.join(', ')}`);
+            });
+        });
+
+        powerUpTests.test('every level offers a way to grow', () => {
+            for (const design of LEVELS) {
+                const items = (design.blocks || []).flatMap(row => row.items.map(item => item[1]));
+                assert(items.includes('mushroom'), `${design.name} has no mushroom anywhere`);
             }
-            assert(tight.length === 0, tight.join(', '));
+        });
+
+        // Test Suite 19b: The moving parts introduced by the later levels
+        const rideTests = new TestRunner('Moving Platforms, Springs and Hazards');
+
+        rideTests.test('a moving platform turns around at the end of its run', () => {
+            const mover = new MovingPlatform(400, 300, 120, { axis: 'x', range: 80, speed: 2 });
+            let min = mover.x, max = mover.x;
+            for (let i = 0; i < 400; i++) {
+                mover.update();
+                min = Math.min(min, mover.x);
+                max = Math.max(max, mover.x);
+            }
+            assertEqual(Math.round(min), 320, 'should not travel past its left limit');
+            assertEqual(Math.round(max), 480, 'should not travel past its right limit');
+        });
+
+        rideTests.test('a moving platform is deterministic', () => {
+            const a = new MovingPlatform(400, 300, 120, { axis: 'y', range: 60, speed: 1.3 });
+            const b = new MovingPlatform(400, 300, 120, { axis: 'y', range: 60, speed: 1.3 });
+            for (let i = 0; i < 137; i++) { a.update(); b.update(); }
+            assertEqual(a.y, b.y, 'two identical platforms drifted apart');
+        });
+
+        rideTests.test('a rider is carried along with the platform', () => {
+            initLevel();
+            const mover = new MovingPlatform(600, 300, 120, { axis: 'x', range: 100, speed: 2 });
+            platforms.push(mover);
+            movers.push(mover);
+            rebuildSolids();
+
+            player.x = 640;
+            player.y = mover.y - player.height;
+            player.velocityY = 1;
+            moveAndCollide(player);          // land on it, taking the reference
+            assertEqual(player.ridingPlatform, mover, 'standing on it should count as riding it');
+
+            const before = player.x;
+            mover.update();
+            carryRiders();
+            assertEqual(Math.round(player.x - before), Math.round(mover.dx),
+                'the rider should move exactly as far as the platform did');
+        });
+
+        rideTests.test('a rider is not shoved into a wall', () => {
+            initLevel();
+            const mover = new MovingPlatform(600, 300, 120, { axis: 'x', range: 100, speed: 4 });
+            const wall = new Platform(760, 200, 40, 200, 'brick');
+            platforms.push(mover, wall);
+            movers.push(mover);
+            rebuildSolids();
+
+            player.x = 720;                 // right up against the wall
+            player.y = mover.y - player.height;
+            player.ridingPlatform = mover;
+            mover.dx = 40;                  // a shove that would bury them in it
+            const before = player.x;
+            carryRiders();
+            assertEqual(player.x, before, 'the rider should be left behind, not embedded');
+            assert(!player.ridingPlatform, 'and should stop counting as a passenger');
+        });
+
+        rideTests.test('a spring throws the player higher than a jump', () => {
+            initLevel();
+            const spring = new Spring(player.x, player.y + player.height);
+            springs.push(spring);
+            player.velocityY = 4;           // coming down onto it
+            player.jumpHeld = false;
+            spring.update();
+            assertEqual(player.velocityY, CONFIG.SPRING_POWER, 'the pad should launch the player');
+            assert(CONFIG.SPRING_POWER < CONFIG.JUMP_POWER, 'a bounce should beat a jump');
+            assert(CONFIG.SPRING_POWER_HELD < CONFIG.SPRING_POWER, 'holding jump should go higher still');
+        });
+
+        rideTests.test('a spring ignores a player on the way up', () => {
+            initLevel();
+            const spring = new Spring(player.x, player.y + player.height);
+            springs.push(spring);
+            player.velocityY = -6;          // already rising through it
+            spring.update();
+            assertEqual(player.velocityY, -6, 'a rising player should pass by untouched');
+        });
+
+        rideTests.test('spikes cost the player a size, lava costs a life', () => {
+            initLevel();
+            player.health = 2;
+            player.setInvulnerable(false);
+            const spikes = new Hazard(player.x, player.y + player.height - 10, 40, 20, 'spikes');
+            spikes.update();
+            assertEqual(player.health, 1, 'spikes should knock a big player down to small');
+
+            initLevel();
+            player.setInvulnerable(false);
+            const lava = new Hazard(player.x, player.y, 40, 60, 'lava');
+            lava.update();
+            assert(player.dying, 'lava should be fatal whatever size you are');
+        });
+
+        rideTests.test('a star throws you out of the lava instead of saving you in it', () => {
+            initLevel();
+            player.giveStar();
+            const lava = new Hazard(player.x, player.y, 40, 60, 'lava');
+            lava.update();
+            assert(!player.dying, 'star power should survive a lava touch');
+            assert(player.velocityY < 0, 'and should throw the player clear');
         });
 
         // Test Suite 20: PWA
@@ -1318,6 +1728,605 @@
             assertEqual(multiplayer.coinFromKey('coin_notanumber'), null, 'Bad keys should resolve to null');
         });
 
+        // Test Suite: Multiplayer Rounds
+        const roundTests = new TestRunner('Multiplayer Rounds');
+
+        // Drives the real derivations against a synthetic round. Everything the
+        // round system does is a pure function of one timestamp, which is what
+        // makes it testable without a database.
+        function withRound(round, connected, fn) {
+            const saved = {
+                round: multiplayerState.round,
+                connected: multiplayerState.connected,
+                offset: multiplayerState.serverTimeOffset,
+            };
+
+            multiplayerState.round = round;
+            multiplayerState.connected = connected;
+            multiplayerState.serverTimeOffset = 0;
+
+            try {
+                return fn();
+            } finally {
+                multiplayerState.round = saved.round;
+                multiplayerState.connected = saved.connected;
+                multiplayerState.serverTimeOffset = saved.offset;
+            }
+        }
+
+        roundTests.test('A round counter maps to a world and a lap', () => {
+            assertEqual(roundDesign(0).design, LEVELS[0], 'Round 0 is the first world');
+            assertEqual(roundDesign(0).lap, 1, 'Round 0 is lap 1');
+
+            const last = LEVELS.length - 1;
+            assertEqual(roundDesign(last).design, LEVELS[last], 'The last world closes lap 1');
+            assertEqual(roundDesign(last).lap, 1, 'The last world is still lap 1');
+
+            // Rounds keep counting up, so the campaign comes round again.
+            assertEqual(roundDesign(LEVELS.length).design, LEVELS[0], 'The counter wraps to the first world');
+            assertEqual(roundDesign(LEVELS.length).lap, 2, 'Wrapping starts lap 2');
+            assertEqual(roundDesign(LEVELS.length * 3 + 2).index, 2, 'Deep counters still land on the right world');
+        });
+
+        roundTests.test('Every round lands on a real world', () => {
+            for (let counter = 0; counter < LEVELS.length * 4; counter++) {
+                const spot = roundDesign(counter);
+                assert(spot.design && spot.design.name, `Round ${counter} has no design`);
+                assert(spot.index >= 0 && spot.index < LEVELS.length, `Round ${counter} indexed out of range`);
+                assert(spot.lap >= 1, `Round ${counter} produced lap ${spot.lap}`);
+            }
+        });
+
+        roundTests.test('The clock reads active, then intermission, then expired', () => {
+            const round = { index: 3, startedAt: 1000000, duration: 150000 };
+
+            withRound(round, true, () => {
+                const start = roundView(round.startedAt);
+                assertEqual(start.phase, ROUND_PHASE.ACTIVE, 'A round opens active');
+                assertEqual(start.remainingMs, 150000, 'A fresh round has its full duration left');
+
+                const middle = roundView(round.startedAt + 50000);
+                assertEqual(middle.phase, ROUND_PHASE.ACTIVE, 'Still active halfway through');
+                assertEqual(middle.remainingMs, 100000, 'Remaining time counts down');
+
+                const whistle = roundView(round.startedAt + 150000);
+                assertEqual(whistle.phase, ROUND_PHASE.INTERMISSION, 'The clock running out settles the round');
+                assertEqual(whistle.remainingMs, ROUND.INTERMISSION_MS, 'The intermission starts at full length');
+
+                const breakEnd = roundView(round.startedAt + 150000 + ROUND.INTERMISSION_MS);
+                assertEqual(breakEnd.phase, ROUND_PHASE.EXPIRED, 'The intermission runs out into expired');
+
+                const later = roundView(round.startedAt + 999999);
+                assertEqual(later.phase, ROUND_PHASE.EXPIRED, 'A long-dead round stays expired');
+                assertEqual(later.index, 3, 'The index survives expiry so the master knows what to advance from');
+            });
+        });
+
+        roundTests.test('The clock is null until the first snapshot arrives', () => {
+            withRound(null, true, () => {
+                assertEqual(roundView(), null, 'No round means no view');
+                assertEqual(roundIsSettled(), false, 'Nothing to settle before a round exists');
+            });
+        });
+
+        roundTests.test('A start time in the future cannot show more than a full round', () => {
+            // A device whose clock drifts after the offset was last read can see
+            // a startedAt slightly ahead of its own now.
+            const round = { index: 0, startedAt: 1000000, duration: 150000 };
+            withRound(round, true, () => {
+                const view = roundView(round.startedAt - 20000);
+                assertEqual(view.phase, ROUND_PHASE.ACTIVE, 'Skew should not change the phase');
+                assertEqual(view.remainingMs, 150000, 'Remaining time is capped at the round duration');
+            });
+        });
+
+        roundTests.test('The world is frozen between rounds', () => {
+            const round = { index: 0, startedAt: 1000000, duration: 150000 };
+            const realView = window.roundView;
+
+            withRound(round, true, () => {
+                // roundIsSettled reads the live clock, so drive it through a stub.
+                window.roundView = () => ({ phase: ROUND_PHASE.ACTIVE, index: 0, remainingMs: 5000 });
+                assertEqual(roundIsSettled(), false, 'An active round is not settled');
+
+                window.roundView = () => ({ phase: ROUND_PHASE.INTERMISSION, index: 0, remainingMs: 5000 });
+                assertEqual(roundIsSettled(), true, 'An intermission is settled');
+
+                window.roundView = () => ({ phase: ROUND_PHASE.EXPIRED, index: 0, remainingMs: 0 });
+                assertEqual(roundIsSettled(), true, 'An expired round is settled');
+            });
+
+            window.roundView = realView;
+        });
+
+        roundTests.test('Round durations from the database are clamped', () => {
+            // The rules bound this too; the client refuses to render a nonsense
+            // countdown even if one ever gets past them.
+            assert(ROUND.MIN_DURATION_MS < ROUND.DURATION_MS, 'The default duration should sit above the floor');
+            assert(ROUND.MAX_DURATION_MS > ROUND.DURATION_MS, 'The default duration should sit below the ceiling');
+            assertEqual(clamp(5, ROUND.MIN_DURATION_MS, ROUND.MAX_DURATION_MS), ROUND.MIN_DURATION_MS,
+                'A tiny duration clamps up to the floor');
+            assertEqual(clamp(99999999, ROUND.MIN_DURATION_MS, ROUND.MAX_DURATION_MS), ROUND.MAX_DURATION_MS,
+                'A huge duration clamps down to the ceiling');
+        });
+
+        roundTests.test('The clock reads as minutes and seconds', () => {
+            assertEqual(formatClock(150000), '2:30', 'Two and a half minutes');
+            assertEqual(formatClock(60000), '1:00', 'A minute pads its seconds');
+            assertEqual(formatClock(9000), '0:09', 'Single seconds are padded');
+            assertEqual(formatClock(0), '0:00', 'Zero reads as zero');
+            assertEqual(formatClock(-5000), '0:00', 'A clock never goes negative');
+        });
+
+        roundTests.test('Standings order by score, then by name', () => {
+            const saved = {
+                remote: multiplayerState.remotePlayers,
+                id: multiplayerState.playerId,
+                name: multiplayerState.playerName,
+                score: gameState.score,
+            };
+
+            multiplayerState.remotePlayers = new Map([
+                ['uid-b', { name: 'Bea', score: 900 }],
+                ['uid-c', { name: 'Cai', score: 300 }],
+                ['uid-d', { name: 'Ali', score: 300 }],
+            ]);
+            multiplayerState.playerId = 'uid-me';
+            multiplayerState.playerName = 'Me';
+            gameState.score = 500;
+
+            try {
+                const board = roundStandings();
+                assertEqual(board.length, 4, 'Everyone in the session is on the board');
+                assertEqual(board[0].name, 'Bea', 'Highest score leads');
+                assertEqual(board[1].name, 'Me', 'Our own score is placed among the rest');
+                assert(board[1].isSelf, 'Our own row is flagged');
+                // 300 each - the tie has to break the same way on every screen,
+                // not on whatever order the players happened to arrive in.
+                assertEqual(board[2].name, 'Ali', 'A tie breaks on name');
+                assertEqual(board[3].name, 'Cai', 'A tie breaks on name');
+            } finally {
+                multiplayerState.remotePlayers = saved.remote;
+                multiplayerState.playerId = saved.id;
+                multiplayerState.playerName = saved.name;
+                gameState.score = saved.score;
+            }
+        });
+
+        roundTests.test('The level plan follows the round, not the level counter', () => {
+            const savedLevel = gameState.level;
+            gameState.level = 1;
+
+            try {
+                withRound({ index: 2, startedAt: Date.now(), duration: 150000 }, true, () => {
+                    const plan = levelPlan();
+                    assertEqual(plan.design, LEVELS[2], 'Round 2 puts everyone in the third world');
+                    assertEqual(plan.label, '1-3', 'The HUD label follows the round');
+                });
+
+                withRound({ index: LEVELS.length, startedAt: Date.now(), duration: 150000 }, true, () => {
+                    assertEqual(levelPlan().design, LEVELS[0], 'The rounds wrap back to the first world');
+                    assertEqual(levelPlan().lap, 2, 'Wrapping counts as a new lap');
+                });
+
+                // Before the first snapshot there is nothing to go on.
+                withRound(null, true, () => {
+                    assertEqual(levelPlan().design, LEVELS[0], 'With no round yet, everyone stands in the first world');
+                });
+            } finally {
+                gameState.level = savedLevel;
+            }
+        });
+
+        roundTests.test('Single player is untouched by the round clock', () => {
+            const savedLevel = gameState.level;
+
+            try {
+                // A round left in state must not leak into a solo run.
+                withRound({ index: 3, startedAt: Date.now(), duration: 150000 }, false, () => {
+                    gameState.level = 2;
+                    assertEqual(levelPlan().design, LEVELS[1], 'Solo play follows the level counter');
+                    assertEqual(levelPlan().label, '1-2', 'Solo labels come from the campaign, not the round');
+                });
+            } finally {
+                gameState.level = savedLevel;
+            }
+        });
+
+        roundTests.test('The HUD clock shows the round, not a dash', () => {
+            const timeEl = document.getElementById('time');
+            const labelEl = document.getElementById('time-label');
+            assert(timeEl, 'Time element not found');
+            assert(labelEl, 'Time label element not found - the clock caption has no id');
+
+            const savedText = timeEl.textContent;
+            const savedLabel = labelEl.textContent;
+            const startedAt = Date.now();
+
+            try {
+                withRound({ index: 0, startedAt, duration: 150000 }, true, () => {
+                    const urgent = updateClockDisplay();
+                    assertEqual(labelEl.textContent, 'Round', 'The caption reads Round in multiplayer');
+                    assert(/^\d+:\d\d$/.test(timeEl.textContent), `Expected m:ss, got ${timeEl.textContent}`);
+                    assertEqual(urgent, false, 'A round that has just started is not urgent');
+                });
+
+                // The last thirty seconds should be shouting.
+                withRound({ index: 0, startedAt: startedAt - 145000, duration: 150000 }, true, () => {
+                    assertEqual(updateClockDisplay(), true, 'The end of a round is urgent');
+                });
+
+                // Connected, but no snapshot yet.
+                withRound(null, true, () => {
+                    updateClockDisplay();
+                    assertEqual(timeEl.textContent, '--', 'With no round yet the clock is blank');
+                });
+            } finally {
+                timeEl.textContent = savedText;
+                labelEl.textContent = savedLabel;
+            }
+        });
+
+        roundTests.test('Multiplayer builds no flagpole, so only the clock ends a round', () => {
+            // The round clock is the only ending multiplayer has: initLevel
+            // deliberately skips the flag when connected, so a session that
+            // could not read the clock would never end at all.
+            assert(typeof updateRound === 'function', 'updateRound should drive the round forward');
+            assert(typeof multiplayer.advanceRound === 'function', 'The master needs a way to open the next world');
+            assert(typeof multiplayer.ensureRound === 'function', 'The first client needs a way to open round zero');
+        });
+
+        // Test Suite: Territory
+        const territoryTests = new TestRunner('Territory');
+
+        // Territory reads a lot of shared state. Every test here puts back what
+        // it borrowed, so the suite can run in any order.
+        function withTerritory(fn) {
+            const saved = {
+                owners: new Map(territoryState.owners),
+                colors: new Map(territoryState.colors),
+                tileCount: territoryState.tileCount,
+                shares: territoryState.shares,
+                dirty: territoryState.dirty,
+                connected: multiplayerState.connected,
+                round: multiplayerState.round,
+                id: multiplayerState.playerId,
+                name: multiplayerState.playerName,
+                color: multiplayerState.playerColor,
+                remote: multiplayerState.remotePlayers,
+                score: gameState.score,
+            };
+            try {
+                return fn();
+            } finally {
+                territoryState.owners = saved.owners;
+                territoryState.colors = saved.colors;
+                territoryState.tileCount = saved.tileCount;
+                territoryState.shares = saved.shares;
+                territoryState.dirty = saved.dirty;
+                multiplayerState.connected = saved.connected;
+                multiplayerState.round = saved.round;
+                multiplayerState.playerId = saved.id;
+                multiplayerState.playerName = saved.name;
+                multiplayerState.playerColor = saved.color;
+                multiplayerState.remotePlayers = saved.remote;
+                gameState.score = saved.score;
+            }
+        }
+
+        // Opens a territory round with us in it, against the level currently built.
+        function enterTerritoryRound() {
+            let counter = 0;
+            while (roundMode(counter) !== ROUND_MODES.TERRITORY) counter++;
+            multiplayerState.connected = true;
+            multiplayerState.round = { index: counter, startedAt: Date.now(), duration: ROUND.DURATION_MS };
+            multiplayerState.playerId = 'uid-me';
+            multiplayerState.playerName = 'Me';
+            multiplayerState.playerColor = PLAYER_COLORS[0];
+            multiplayerState.remotePlayers = new Map();
+            territoryState.owners.clear();
+            territoryState.dirty = true;
+            return counter;
+        }
+
+        territoryTests.test('Rounds alternate between the two games', () => {
+            // Every round plays one of the two, and never something else.
+            for (let i = 0; i < LEVELS.length * 4; i++) {
+                const mode = roundMode(i);
+                assert(mode === ROUND_MODES.SCORE || mode === ROUND_MODES.TERRITORY,
+                    `Round ${i} produced mode ${mode}`);
+            }
+
+            // Consecutive rounds differ, so a session never plays the same game
+            // twice running.
+            for (let i = 0; i < LEVELS.length * 3; i++) {
+                if (Math.floor(i / LEVELS.length) === Math.floor((i + 1) / LEVELS.length)) {
+                    assert(roundMode(i) !== roundMode(i + 1),
+                        `Rounds ${i} and ${i + 1} play the same game`);
+                }
+            }
+        });
+
+        territoryTests.test('A world is not stuck with the same game every lap', () => {
+            // There is an even number of worlds, so a plain counter % 2 would
+            // pin each world to one game forever. The lap shift is what stops
+            // that, and this is the check that would catch it being dropped.
+            for (let world = 0; world < LEVELS.length; world++) {
+                const lap1 = roundMode(world);
+                const lap2 = roundMode(world + LEVELS.length);
+                assert(lap1 !== lap2,
+                    `${LEVELS[world].name} plays ${lap1} on both lap 1 and lap 2`);
+            }
+        });
+
+        territoryTests.test('Single player is never a territory round', () => {
+            withTerritory(() => {
+                multiplayerState.connected = false;
+                multiplayerState.round = { index: 1, startedAt: Date.now(), duration: ROUND.DURATION_MS };
+                assertEqual(currentRoundMode(), ROUND_MODES.SCORE, 'Solo play is always score attack');
+                assertEqual(isTerritoryRound(), false, 'Solo play is never a territory round');
+            });
+        });
+
+        territoryTests.test('Every ledge is numbered and the ground is not capturable', () => {
+            withTerritory(() => {
+                initLevel();
+
+                assert(platforms.length > 0, 'No platforms were built');
+                platforms.forEach((platform, i) => {
+                    assertEqual(platform.tileId, i, 'A tile id should be its index in platforms');
+                });
+
+                const ground = platforms.filter(p => p.variant === 'ground');
+                assert(ground.length > 0, 'The level has no ground to check');
+                assert(ground.every(p => !p.capturable), 'Ground must never be capturable');
+
+                const ledges = platforms.filter(p => p.variant !== 'ground');
+                assert(ledges.length > 0, 'The level has no ledges to capture');
+                assert(ledges.every(p => p.capturable), 'Every ledge should be capturable');
+                assertEqual(territoryState.tileCount, ledges.length, 'The tile count should be the ledge count');
+            });
+        });
+
+        territoryTests.test('Tile ids are the same every time a level is built', () => {
+            // The whole scheme rests on this: a tile is identified across the
+            // network by nothing but its index, which only works because the
+            // level is built from data in a fixed order with no randomness. If
+            // layout ever picks up a Math.random, this is the test that fails.
+            withTerritory(() => {
+                const fingerprint = () => {
+                    initLevel();
+                    return platforms.map(p => `${p.tileId}:${p.variant}:${p.capturable}:${p.homeX === undefined ? p.x : p.homeX}:${p.homeY === undefined ? p.y : p.homeY}:${p.width}`).join('|');
+                };
+
+                const savedLevel = gameState.level;
+                try {
+                    for (let level = 1; level <= LEVELS.length; level++) {
+                        gameState.level = level;
+                        const first = fingerprint();
+                        const second = fingerprint();
+                        assertEqual(second, first, `Level ${level} numbers its tiles differently on a rebuild`);
+                    }
+                } finally {
+                    gameState.level = savedLevel;
+                    initLevel();
+                }
+            });
+        });
+
+        territoryTests.test('Tile keys survive the round trip', () => {
+            assertEqual(tileIdFromKey(tileKey(0)), 0, 'Tile 0 should round-trip');
+            assertEqual(tileIdFromKey(tileKey(37)), 37, 'Tile 37 should round-trip');
+            assertEqual(tileIdFromKey('tile_notanumber'), null, 'A bad key resolves to null');
+        });
+
+        territoryTests.test('Standing on a ledge takes it, standing on the ground takes nothing', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                const writes = [];
+                multiplayer.claimTile = async (id) => { writes.push(id); };
+
+                try {
+                    const ledge = platforms.find(p => p.capturable);
+                    const ground = platforms.find(p => p.variant === 'ground');
+
+                    claimGround(ledge);
+                    assertEqual(territoryState.owners.get(ledge.tileId), 'uid-me', 'A ledge should be taken');
+                    assertEqual(writes.length, 1, 'Taking a ledge should write once');
+
+                    // Already ours - no work, and above all no second write.
+                    claimGround(ledge);
+                    assertEqual(writes.length, 1, 'Standing on a ledge you own must not write again');
+
+                    claimGround(ground);
+                    assertEqual(territoryState.owners.has(ground.tileId), false, 'The ground cannot be taken');
+                    assertEqual(writes.length, 1, 'The ground must not produce a write');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
+        territoryTests.test('Walking from one ledge to the next takes both', () => {
+            // "Last touched" means touched, not landed on: the claim runs on
+            // every grounded frame, so crossing from one ledge onto another
+            // without leaving the ground takes the second one too.
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                multiplayer.claimTile = async () => {};
+
+                try {
+                    const ledges = platforms.filter(p => p.capturable).slice(0, 2);
+                    assert(ledges.length === 2, 'Need two ledges for this test');
+                    ledges.forEach(l => claimGround(l));
+                    assertEqual(myTerritoryTiles(), 2, 'Both ledges should be ours');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
+        territoryTests.test('Taking a ledge off somebody scores', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                multiplayer.claimTile = async () => {};
+
+                try {
+                    const ledge = platforms.find(p => p.capturable);
+
+                    // A loose ledge is worth the colour, not the points.
+                    gameState.score = 0;
+                    claimGround(ledge);
+                    assertEqual(gameState.score, 0, 'Colouring in a free ledge should not score');
+
+                    // One somebody else holds is worth taking.
+                    setTileOwner(ledge.tileId, 'uid-rival');
+                    gameState.score = 0;
+                    claimGround(ledge);
+                    assertEqual(gameState.score, TERRITORY.STEAL_POINTS, 'Taking a held ledge should score');
+                    assertEqual(territoryState.owners.get(ledge.tileId), 'uid-me', 'And it should change hands');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
+        territoryTests.test('Holding pays once a second, per ledge', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                multiplayer.claimTile = async () => {};
+
+                try {
+                    platforms.filter(p => p.capturable).slice(0, 3).forEach(l => claimGround(l));
+                    assertEqual(myTerritoryTiles(), 3, 'Should be holding three ledges');
+
+                    let now = 1000000;
+                    gameState.score = 0;
+                    territoryState.lastPaidAt = now;
+
+                    // Part of a second pays nothing...
+                    payTerritoryHolders(now + 400);
+                    assertEqual(gameState.score, 0, 'Half a second should not pay');
+
+                    // ...a full second pays for every ledge held.
+                    payTerritoryHolders(now + 1000);
+                    assertEqual(gameState.score, 3 * TERRITORY.HOLD_POINTS_PER_TILE, 'A second should pay per ledge');
+
+                    // And it pays once, not once per frame.
+                    payTerritoryHolders(now + 1100);
+                    payTerritoryHolders(now + 1200);
+                    assertEqual(gameState.score, 3 * TERRITORY.HOLD_POINTS_PER_TILE, 'Holding must not pay every frame');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
+        territoryTests.test('Shares add up and are ordered', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const ledges = platforms.filter(p => p.capturable);
+                assert(ledges.length >= 6, 'Need at least six ledges for this test');
+
+                multiplayerState.remotePlayers = new Map([
+                    ['uid-b', { name: 'Bea', score: 0, color: PLAYER_COLORS[1] }],
+                ]);
+
+                ledges.slice(0, 2).forEach(l => setTileOwner(l.tileId, 'uid-me'));
+                ledges.slice(2, 6).forEach(l => setTileOwner(l.tileId, 'uid-b'));
+
+                const shares = territoryShares();
+                assertEqual(shares.length, 2, 'Two players hold ground');
+                assertEqual(shares[0].name, 'Bea', 'The bigger share leads');
+                assertEqual(shares[0].tiles, 4, 'Bea holds four');
+                assertEqual(shares[1].tiles, 2, 'We hold two');
+                assert(shares[1].isSelf, 'Our own row is flagged');
+
+                const total = shares.reduce((sum, s) => sum + s.share, 0);
+                assert(total <= 1.0001, `Shares should never exceed the whole map, got ${total}`);
+                assertEqual(Math.round(shares[0].share * ledges.length), 4, 'A share is its ledge count over the map');
+            });
+        });
+
+        territoryTests.test('Ownership left over from a bigger level is ignored', () => {
+            // Levels are different sizes, and a stale claim can outlive a
+            // rebuild by a few frames. A tile id past the end of the level
+            // standing must not count towards anybody's share.
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                setTileOwner(platforms.length + 500, 'uid-me');
+                assertEqual(myTerritoryTiles(), 0, 'A tile that is not in this level should not count');
+
+                const ground = platforms.find(p => p.variant === 'ground');
+                setTileOwner(ground.tileId, 'uid-me');
+                assertEqual(myTerritoryTiles(), 0, 'A ground tile should not count even if claimed');
+            });
+        });
+
+        territoryTests.test('A ledge keeps its colour after its owner leaves', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                // Bea is here, and painted.
+                territoryState.colors.set('uid-b', PLAYER_COLORS[1]);
+                multiplayerState.remotePlayers = new Map([
+                    ['uid-b', { name: 'Bea', score: 0, color: PLAYER_COLORS[1] }],
+                ]);
+                const ledge = platforms.find(p => p.capturable);
+                setTileOwner(ledge.tileId, 'uid-b');
+                assertEqual(territoryPalette('uid-b'), PLAYER_COLORS[1], 'Bea paints in her own colour');
+
+                // Bea quits. Her ledges stay hers, and stay her colour.
+                multiplayerState.remotePlayers = new Map();
+                assertEqual(territoryPalette('uid-b'), PLAYER_COLORS[1], 'A departed player keeps their colour');
+                assertEqual(territoryOwnerOf(ledge), 'uid-b', 'And keeps their ledges');
+            });
+        });
+
+        territoryTests.test('Nothing is claimed once the round is settled', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                const writes = [];
+                multiplayer.claimTile = async (id) => { writes.push(id); };
+
+                try {
+                    // Wind the clock past the whistle: the world is frozen and
+                    // the standings are up, so the map is closed.
+                    multiplayerState.round = {
+                        index: multiplayerState.round.index,
+                        startedAt: Date.now() - (ROUND.DURATION_MS + 1000),
+                        duration: ROUND.DURATION_MS,
+                    };
+                    assert(roundIsSettled(), 'The round should be settled for this test');
+
+                    claimGround(platforms.find(p => p.capturable));
+                    assertEqual(writes.length, 0, 'A settled round must not accept claims');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
         // Run all tests
         async function runAllTests() {
             const suites = [
@@ -1340,8 +2349,11 @@
                 populationTests,
                 artTests,
                 powerUpTests,
+                rideTests,
                 pwaTests,
-                multiplayerTests
+                multiplayerTests,
+                roundTests,
+                territoryTests
             ];
 
             const allResults = [];
@@ -1427,7 +2439,7 @@
         <div><span id="coins"></span></div>
         <div><span id="lives"></span></div>
         <div><span id="level"></span></div>
-        <div class="time"><span id="time"></span></div>
+        <div class="time"><span id="time-label"></span><span id="time"></span></div>
         <div><span id="combo"></span></div>
     </div>
     <script src="game.js"></script>

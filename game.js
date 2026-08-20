@@ -64,6 +64,8 @@ const CONFIG = {
     PORTAL_WIDTH: 60,
     PORTAL_HEIGHT: 60,
     JUMPER_JUMP_POWER: -9,
+    SPRING_POWER: -15,         // Launch off a bounce pad
+    SPRING_POWER_HELD: -18.5,  // ...and higher still with jump held
     STAR_DURATION: 600,        // 10 seconds of invincibility
     ENEMY_RESPAWN_MS: 8000,
     MAX_ENEMIES_PER_TYPE: 3,
@@ -74,10 +76,13 @@ const CONFIG = {
     enemySpeedScale: 1,        // Raised each level by initLevel()
 
     // --- World ---
+    // WORLD_WIDTH and LEVEL_TIME are per-level: initLevel() sets them from the
+    // design being built. The values here are the level 1-1 defaults.
     WORLD_WIDTH: 3600,         // Large scrollable world
     WORLD_HEIGHT: 600,         // Fixed world height
     LEVEL_TIME: 300,           // Seconds on the level clock
     TIME_TICK_FRAMES: 24,      // Frames per unit of level time
+    surfaceGrip: 1,            // 1 = normal footing, lower = icy (per level)
 };
 
 // Game State
@@ -88,7 +93,10 @@ const gameState = {
     score: 0,
     coins: 0,
     lives: 3,
-    level: 1,
+    level: 1,              // Counts up forever; the campaign loops beneath it
+    worldLabel: '1-1',     // What the HUD shows: lap-level, Mario style
+    levelName: 'Green Hills',
+    levelTime: 300,        // Seconds this level starts with, after lap penalty
     time: 300,
     timeTicker: 0,
     levelCleared: false,
@@ -110,6 +118,141 @@ const PLAYER_COLORS = [
     { name: 'cyan', shirt: '#00CED1', overalls: '#008B8B', skin: '#FFDBAC' },     // Cyan
 ];
 
+// ============================================================================
+//  THEMES
+//  A level's theme is its whole look: sky, backdrop, the dirt under your feet,
+//  the brick you stand on and the tune playing over it. Every drawing routine
+//  in the game reads its colours from here rather than hard-coding them, so a
+//  new setting is a table entry and not a new renderer.
+// ============================================================================
+const THEMES = {
+    overworld: {
+        sky: ['#3E7CC4', '#79B7EC', '#CDEBFF'],
+        light: { kind: 'sun', core: 'rgba(255, 249, 196, 0.95)', halo: 'rgba(255, 236, 139, 0.45)' },
+        backdrop: 'hills',
+        far: 'rgba(88, 132, 176, 0.55)',
+        near: 'rgba(74, 154, 96, 0.75)',
+        clouds: 'rgba(255, 255, 255, 0.88)',
+        scenery: 'bushes',
+        sceneryColor: 'rgba(46, 125, 62, 0.85)',
+        soil: ['#A9663A', '#8B4513', '#5C3010'],
+        turf: ['#3FA34D', '#5FD068'],
+        blades: true,
+        brick: ['#E08A4A', '#A0522D'],
+        mortar: 'rgba(90, 45, 20, 0.65)',
+        block: ['#A0763F', '#6E4B22'],
+        blockEdge: '#4A3113',
+        oneWay: 'cloud',
+        deep: ['#4A2A12', '#1B0F06'],
+        track: 'overworld',
+    },
+    coast: {
+        sky: ['#1E5F9E', '#5FB3E4', '#FFE2B8'],
+        light: { kind: 'sun', core: 'rgba(255, 236, 190, 0.95)', halo: 'rgba(255, 190, 120, 0.45)' },
+        backdrop: 'hills',
+        far: 'rgba(70, 120, 170, 0.5)',
+        near: 'rgba(96, 164, 140, 0.7)',
+        clouds: 'rgba(255, 242, 226, 0.9)',
+        scenery: 'palms',
+        sceneryColor: 'rgba(38, 110, 88, 0.9)',
+        soil: ['#E4C58A', '#C9A96B', '#8A6A3A'],
+        turf: ['#69C7A8', '#8FE3C6'],
+        blades: false,
+        brick: ['#E9D7A8', '#B99A63'],
+        mortar: 'rgba(120, 95, 55, 0.6)',
+        block: ['#D8C08A', '#A8874E'],
+        blockEdge: '#6E5528',
+        oneWay: 'cloud',
+        deep: ['#1B4A63', '#08202F'],
+        track: 'overworld',
+    },
+    cave: {
+        sky: ['#0D0B1A', '#1A1430', '#2A1F3D'],
+        light: { kind: 'none' },
+        backdrop: 'cave',
+        far: 'rgba(52, 42, 82, 0.8)',
+        near: 'rgba(34, 26, 58, 0.9)',
+        clouds: null,
+        scenery: 'crystals',
+        sceneryColor: 'rgba(120, 200, 220, 0.55)',
+        soil: ['#4A4460', '#332E48', '#1B1728'],
+        turf: ['#5C5680', '#7B74A6'],
+        blades: false,
+        brick: ['#6A6188', '#3C3555'],
+        mortar: 'rgba(20, 16, 34, 0.7)',
+        block: ['#6E6690', '#3B3455'],
+        blockEdge: '#1A1428',
+        oneWay: 'plank',
+        deep: ['#140F22', '#05030A'],
+        track: 'cavern',
+    },
+    sky: {
+        sky: ['#2E6FD8', '#7EB6F5', '#DDF1FF'],
+        light: { kind: 'sun', core: 'rgba(255, 255, 235, 0.95)', halo: 'rgba(200, 235, 255, 0.45)' },
+        backdrop: 'none',
+        far: 'rgba(255,255,255,0.4)',
+        near: 'rgba(255,255,255,0.55)',
+        clouds: 'rgba(255, 255, 255, 0.95)',
+        scenery: 'none',
+        sceneryColor: 'rgba(255,255,255,0.6)',
+        // Warm stone against a cold sky: white-on-blue washed out badly, and
+        // you could not see where a ledge ended.
+        soil: ['#F0E7D2', '#D2C29B', '#9A8963'],
+        turf: ['#FFF6E2', '#FFFFFF'],
+        blades: false,
+        brick: ['#F3EAD6', '#C0AE86'],
+        mortar: 'rgba(120, 105, 70, 0.55)',
+        block: ['#EFE6D2', '#BFAE8C'],
+        blockEdge: '#8B7B5C',
+        oneWay: 'cloud',
+        deep: ['rgba(120, 175, 225, 0.55)', 'rgba(70, 130, 190, 0.15)'],
+        track: 'sky',
+    },
+    ice: {
+        sky: ['#0B1B3A', '#20406E', '#7FA9C9'],
+        light: { kind: 'moon', core: 'rgba(235, 245, 255, 0.95)', halo: 'rgba(180, 215, 255, 0.35)' },
+        backdrop: 'peaks',
+        far: 'rgba(150, 185, 220, 0.5)',
+        near: 'rgba(200, 226, 245, 0.7)',
+        clouds: 'rgba(220, 235, 250, 0.55)',
+        scenery: 'drifts',
+        sceneryColor: 'rgba(226, 240, 252, 0.9)',
+        soil: ['#BCD9EC', '#7FA6C4', '#3F5F80'],
+        turf: ['#DFF1FF', '#FFFFFF'],
+        blades: false,
+        brick: ['#CFE7F7', '#8FB4CE'],
+        mortar: 'rgba(90, 130, 165, 0.55)',
+        block: ['#CFE7F7', '#87AFCC'],
+        blockEdge: '#4E7392',
+        oneWay: 'ice',
+        deep: ['#16304F', '#050D1A'],
+        track: 'sky',
+    },
+    castle: {
+        sky: ['#1B0A0A', '#3A1208', '#8A2E08'],
+        light: { kind: 'ember', core: 'rgba(255, 170, 60, 0.5)', halo: 'rgba(200, 60, 10, 0.25)' },
+        backdrop: 'pillars',
+        far: 'rgba(60, 30, 30, 0.75)',
+        near: 'rgba(38, 20, 22, 0.9)',
+        clouds: 'rgba(60, 30, 25, 0.55)',
+        scenery: 'none',
+        sceneryColor: 'rgba(80, 40, 30, 0.9)',
+        soil: ['#5A4038', '#3E2A26', '#1E1210'],
+        turf: ['#6B4A40', '#8A6055'],
+        blades: false,
+        brick: ['#7A5A50', '#41302C'],
+        mortar: 'rgba(15, 8, 6, 0.7)',
+        block: ['#7E5F52', '#43302A'],
+        blockEdge: '#150B08',
+        oneWay: 'ember',
+        deep: ['#3A0D06', '#120301'],
+        track: 'castle',
+    },
+};
+
+// The theme in force right now. Set by initLevel(); every renderer reads it.
+let theme = THEMES.overworld;
+
 // How many all-time scores are kept and shown. The stored table is trimmed to
 // this on write so it cannot grow without bound.
 const ALL_TIME_LEADERBOARD_SIZE = 10;
@@ -129,6 +272,72 @@ function escapeHtml(value) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 }
+
+// ---------------------------------------------------------------------------
+//  MULTIPLAYER ROUNDS
+// ---------------------------------------------------------------------------
+// Multiplayer used to be one level on an infinite loop: no flag is built when
+// connected, so nothing could ever end a session. A round gives it a shape -
+// everyone plays the same world against the same clock, the standings are
+// settled, and the next world starts. All of it derives from a single shared
+// timestamp rather than a synchronised state machine, so a client that joins
+// halfway through lands on the right world with the right time left on it.
+const ROUND = {
+    DURATION_MS: 150000,        // 2:30 of play per world
+    INTERMISSION_MS: 12000,     // Standings, then the next world
+    // A duration read off the database is clamped into this range before it is
+    // trusted. The rules bound it too; this is the client refusing to render a
+    // twelve-hour countdown if anything ever slips past them.
+    MIN_DURATION_MS: 30000,
+    MAX_DURATION_MS: 600000,
+    URGENT_MS: 30000,           // When the clock starts shouting
+};
+
+const ROUND_PHASE = {
+    ACTIVE: 'active',           // Playing, clock running
+    INTERMISSION: 'intermission', // Round settled, next world on the way
+    EXPIRED: 'expired',         // Intermission is over and nobody has advanced yet
+};
+
+// What game a round is. Which one you get is derived from the round counter
+// rather than stored, so every client agrees without a field to keep in step.
+const ROUND_MODES = {
+    SCORE: 'score',             // Coins, stomps and the leaderboard
+    TERRITORY: 'territory',     // Paint the ledges your colour
+};
+
+// ---------------------------------------------------------------------------
+//  TERRITORY
+// ---------------------------------------------------------------------------
+// Every ledge you can stand on belongs to whoever touched it last. The ground
+// itself is deliberately excluded: the ground segments are 700-900px wide
+// against 160-200px ledges, so counting them would make jogging along the floor
+// the whole game and the platforming irrelevant. Leaving them neutral is what
+// pushes everybody up into the air, which is where the contest is.
+const TERRITORY = {
+    HOLD_POINTS_PER_TILE: 1,    // Per tile, per second held
+    STEAL_POINTS: 25,           // For taking a ledge off somebody
+    WIN_BONUS: 2000,            // Multiplied by your final share at the whistle
+};
+
+const territoryState = {
+    ref: null,
+    // tileId -> uid. The source of truth for who owns what: a snapshot can
+    // arrive before or after the level is built, so ownership cannot live on
+    // the platform objects themselves.
+    owners: new Map(),
+    // uid -> palette, remembered for everyone we have ever seen. A player who
+    // quits mid-round leaves their colour on the board behind them, and
+    // remotePlayers no longer has them.
+    colors: new Map(),
+    tileCount: 0,
+    // Server time the last hold payment was made, so holding pays once a second
+    // however many frames go by.
+    lastPaidAt: 0,
+    // Cached shares, recomputed only when ownership actually changes.
+    shares: [],
+    dirty: true,
+};
 
 // Multiplayer State
 const multiplayerState = {
@@ -161,6 +370,19 @@ const multiplayerState = {
     serverTimeOffset: 0,
     lastLeaderboardSignature: '',
     lastSubmittedAllTimeScore: 0,
+    roundRef: null,
+    // { index, startedAt, duration } in server time, or null before the first
+    // snapshot arrives. The index is a monotonic round counter, not a level
+    // index - which world it means is index % LEVELS.length.
+    round: null,
+    // The phase this client last acted on, so the transition into the
+    // intermission fires exactly once however often tick() looks at the clock.
+    roundPhaseSeen: null,
+    // Standings frozen at the whistle, so the board cannot move while it is
+    // being read.
+    roundResult: null,
+    // Rate-limits the spawn master's retries when a round advance fails.
+    lastAdvanceAttempt: 0,
     // Track last synced values to avoid redundant updates
     lastSyncedState: {
         x: null,
@@ -227,6 +449,7 @@ class MultiplayerManager {
             // Assign color based on player ID hash
             const colorIndex = Math.abs(this.hashCode(multiplayerState.playerId)) % PLAYER_COLORS.length;
             multiplayerState.playerColor = PLAYER_COLORS[colorIndex];
+            territoryState.colors.set(uid, multiplayerState.playerColor);
 
             // Set up Firebase references
             multiplayerState.playersRef = this.db.ref('players');
@@ -235,6 +458,8 @@ class MultiplayerManager {
             multiplayerState.enemiesRef = this.db.ref('enemies');
             multiplayerState.portalRef = this.db.ref('portals');
             multiplayerState.hitsRef = this.db.ref('hits');
+            multiplayerState.roundRef = this.db.ref('round');
+            territoryState.ref = this.db.ref('territory');
 
             // Initialize player data
             await multiplayerState.playerRef.set({
@@ -273,6 +498,13 @@ class MultiplayerManager {
 
             // Listen for incoming PvP hits
             this.listenForHits();
+
+            // Listen for the shared round clock. This also opens round zero if
+            // this client is the first into an empty session.
+            this.listenForRound();
+
+            // Listen for who owns which ledge.
+            this.listenForTerritory();
 
             // Update leaderboard
             this.updateLeaderboard();
@@ -314,6 +546,171 @@ class MultiplayerManager {
     // them against.
     serverNow() {
         return Date.now() + multiplayerState.serverTimeOffset;
+    }
+
+    // ---- Territory ---------------------------------------------------------
+
+    // Ownership is a flat node of tile -> uid. There is no transaction here and
+    // there should not be: last write wins is exactly what capturing a ledge
+    // means, unlike a coin, where two players banking the same one is a bug.
+    listenForTerritory() {
+        if (!territoryState.ref) return;
+
+        const apply = (snapshot) => {
+            const tileId = tileIdFromKey(snapshot.key);
+            const data = snapshot.val();
+            if (tileId === null || !data || !data.owner) return;
+            setTileOwner(tileId, data.owner);
+        };
+
+        territoryState.ref.on('child_added', apply);
+        territoryState.ref.on('child_changed', apply);
+        territoryState.ref.on('child_removed', (snapshot) => {
+            setTileOwner(tileIdFromKey(snapshot.key), null);
+        });
+    }
+
+    async claimTile(tileId) {
+        if (!territoryState.ref || !multiplayerState.connected) return;
+
+        try {
+            await territoryState.ref.child(tileKey(tileId)).set({
+                owner: multiplayerState.playerId,
+                at: this.serverNow(),
+            });
+        } catch (error) {
+            console.error('Failed to claim a ledge:', error);
+        }
+    }
+
+    // ---- Rounds -----------------------------------------------------------
+
+    // The round node is one small object that every client reads and only the
+    // spawn master writes. Everything else - which world we are on, how long
+    // is left, whether we are playing or reading the standings - is derived
+    // from it locally, so there is no per-tick traffic and no way for two
+    // clients to disagree about the clock beyond their offset from the server.
+    listenForRound() {
+        if (!multiplayerState.roundRef) return;
+
+        multiplayerState.roundRef.on('value', (snapshot) => {
+            const data = snapshot.val();
+
+            if (!data || typeof data.index !== 'number' || typeof data.startedAt !== 'number') {
+                multiplayerState.round = null;
+                // An empty node means nobody has started the session yet. Any
+                // client may open the first round; the transaction settles it.
+                this.ensureRound();
+                return;
+            }
+
+            const previous = multiplayerState.round;
+            multiplayerState.round = {
+                index: Math.max(0, Math.floor(data.index)),
+                startedAt: data.startedAt,
+                duration: clamp(
+                    typeof data.duration === 'number' ? data.duration : ROUND.DURATION_MS,
+                    ROUND.MIN_DURATION_MS,
+                    ROUND.MAX_DURATION_MS
+                ),
+            };
+
+            if (!previous || previous.index !== multiplayerState.round.index) {
+                onRoundStarted(previous);
+            }
+        });
+    }
+
+    // Opens round zero if the session has none. Guarded by a transaction, so
+    // several clients arriving at an empty database at once still produce one
+    // round rather than one each.
+    async ensureRound() {
+        if (!multiplayerState.roundRef || this.openingRound) return;
+        this.openingRound = true;
+
+        try {
+            await multiplayerState.roundRef.transaction((current) => {
+                if (current && typeof current.index === 'number') return undefined; // Someone got there first
+                return { index: 0, startedAt: this.serverNow(), duration: ROUND.DURATION_MS };
+            });
+        } catch (error) {
+            console.error('Failed to open the first round:', error);
+        } finally {
+            this.openingRound = false;
+        }
+    }
+
+    /**
+     * Moves the session on to the next world. Only the spawn master calls this,
+     * but the transaction is guarded on the index we are advancing *from*
+     * rather than trusting that: if the role changes hands during an
+     * intermission and both clients try, the second one reads an index that has
+     * already moved and aborts. Advancing is therefore idempotent, which is
+     * what stops a handover skipping a world.
+     */
+    async advanceRound(fromIndex) {
+        if (!multiplayerState.roundRef || this.advancingRound) return false;
+        this.advancingRound = true;
+
+        try {
+            const result = await multiplayerState.roundRef.transaction((current) => {
+                if (!current || current.index !== fromIndex) return undefined; // Already moved on
+                return { index: fromIndex + 1, startedAt: this.serverNow(), duration: ROUND.DURATION_MS };
+            });
+
+            if (result.committed) await this.clearSharedWorld();
+            return result.committed;
+        } catch (error) {
+            console.error('Failed to advance the round:', error);
+            return false;
+        } finally {
+            this.advancingRound = false;
+        }
+    }
+
+    /**
+     * Wipes the world state that belonged to the round just finished. Enemies
+     * are the important half: their coordinates were chosen for the old level,
+     * so carrying them over drops turtles into the walls of the new one.
+     * Clearing a coin claim marks that coin uncollected, which is exactly what
+     * a fresh world wants.
+     */
+    async clearSharedWorld() {
+        try {
+            const jobs = [];
+
+            // The enemies node is writable as a whole, so it goes in one call.
+            if (multiplayerState.enemiesRef) jobs.push(multiplayerState.enemiesRef.remove());
+
+            // Coin claims are not: the rules put .write on coins/$coin and
+            // nothing on the parent, so removing the node outright is denied.
+            // Nulling each claim in one multi-path update is checked per child
+            // instead, and clearing a claim is something the rules already
+            // allow anybody to do once the coin is up for respawn.
+            if (multiplayerState.coinsRef) {
+                jobs.push(multiplayerState.coinsRef.once('value').then((snapshot) => {
+                    const cleared = {};
+                    snapshot.forEach((child) => { cleared[child.key] = null; });
+                    if (Object.keys(cleared).length) return multiplayerState.coinsRef.update(cleared);
+                }));
+            }
+
+            // Territory is per-world by definition, and the rules put .write on
+            // territory/$tile for the same reason, so it is cleared the same
+            // way. Carrying it over would open a new world with the last one's
+            // map already painted in.
+            if (territoryState.ref) {
+                jobs.push(territoryState.ref.once('value').then((snapshot) => {
+                    const cleared = {};
+                    snapshot.forEach((child) => { cleared[child.key] = null; });
+                    if (Object.keys(cleared).length) return territoryState.ref.update(cleared);
+                }));
+            }
+
+            await Promise.all(jobs);
+        } catch (error) {
+            console.error('Failed to clear the world between rounds:', error);
+        }
     }
 
     listenForPlayers() {
@@ -366,9 +763,14 @@ class MultiplayerManager {
             existingPlayer.timestamp = data.timestamp || this.serverNow();
         } else {
             // New player - initialize with current position
+            const palette = PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0];
+            // Remembered separately so their ledges keep their colour after
+            // they leave and this entry is gone.
+            territoryState.colors.set(id, palette);
+
             multiplayerState.remotePlayers.set(id, {
                 name: data.name || 'Unknown Player',
-                color: PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0],
+                color: palette,
                 x: data.x || 0,
                 y: data.y || 0,
                 targetX: data.x || 0,
@@ -934,6 +1336,11 @@ class MultiplayerManager {
         const leaderboardList = document.getElementById('leaderboard-list');
         if (!leaderboardList) return;
 
+        if (isTerritoryRound()) {
+            this.updateTerritoryUI(leaderboardList);
+            return;
+        }
+
         // Combine current player with remote players
         const allPlayers = [
             {
@@ -962,6 +1369,10 @@ class MultiplayerManager {
             leaderboard.classList.remove('hidden');
         }
 
+        // The heading is shared with the territory board, so put it back.
+        const heading = document.querySelector('#leaderboard h3');
+        if (heading) heading.textContent = 'Top Players';
+
         // Position updates arrive several times a second per player, but the
         // board only changes when a name, score or the ordering does. Skip the
         // innerHTML rebuild otherwise.
@@ -977,6 +1388,54 @@ class MultiplayerManager {
                 <span class="score">${Number(player.score) || 0}</span>
             </div>
         `).join('');
+    }
+
+    /**
+     * The live map split, as a bar per player. This is the whole scoreboard of
+     * a territory round: the number that decides it is the share, so that is
+     * what is on screen while it is being fought over, rather than a score
+     * nobody can convert into a position in their head.
+     */
+    updateTerritoryUI(leaderboardList) {
+        const heading = document.querySelector('#leaderboard h3');
+        if (heading) heading.textContent = 'Territory';
+
+        const leaderboard = document.getElementById('leaderboard');
+        if (leaderboard) leaderboard.classList.remove('hidden');
+
+        const shares = territoryShares();
+        const held = shares.reduce((sum, entry) => sum + entry.tiles, 0);
+        const free = Math.max(0, territoryState.tileCount - held);
+
+        const rows = shares.slice(0, 5);
+        const signature = `t:${rows.map(r => `${r.id}:${r.tiles}`).join('|')}:${free}`;
+        if (signature === multiplayerState.lastLeaderboardSignature) return;
+        multiplayerState.lastLeaderboardSignature = signature;
+
+        const bars = rows.map((entry) => {
+            const percent = Math.round(entry.share * 100);
+            const color = (entry.palette && entry.palette.shirt) || '#BBBBBB';
+            return `
+            <div class="territory-entry ${entry.isSelf ? 'you' : ''}">
+                <span class="swatch" style="background:${escapeHtml(color)}"></span>
+                <span class="name">${escapeHtml(entry.name)}${entry.isSelf ? ' (You)' : ''}</span>
+                <span class="share">${percent}%</span>
+                <span class="bar"><span class="fill" style="width:${percent}%;background:${escapeHtml(color)}"></span></span>
+            </div>`;
+        });
+
+        if (free > 0) {
+            const percent = Math.round((free / (territoryState.tileCount || 1)) * 100);
+            bars.push(`
+            <div class="territory-entry unclaimed">
+                <span class="swatch"></span>
+                <span class="name">Unclaimed</span>
+                <span class="share">${percent}%</span>
+                <span class="bar"><span class="fill" style="width:${percent}%"></span></span>
+            </div>`);
+        }
+
+        leaderboardList.innerHTML = bars.join('');
     }
 
     respawnPlayer() {
@@ -1013,10 +1472,27 @@ class MultiplayerManager {
             multiplayerState.hitsRef.child(multiplayerState.playerId).off();
             multiplayerState.hitsRef.child(multiplayerState.playerId).remove();
         }
+        // The round node outlives us - it belongs to the session, not to this
+        // client - so it is unsubscribed rather than removed.
+        if (multiplayerState.roundRef) {
+            multiplayerState.roundRef.off();
+        }
+        // Territory outlives us too: the ledges we painted stay painted for
+        // everybody still playing the round.
+        if (territoryState.ref) {
+            territoryState.ref.off();
+        }
         multiplayerState.playerMeta.clear();
         multiplayerState.remotePlayers.clear();
         multiplayerState.lastLeaderboardSignature = '';
         multiplayerState.isSpawnMaster = false;
+        multiplayerState.round = null;
+        multiplayerState.roundPhaseSeen = null;
+        multiplayerState.roundResult = null;
+        territoryState.owners.clear();
+        territoryState.colors.clear();
+        territoryState.shares = [];
+        territoryState.dirty = true;
         multiplayerState.connected = false;
     }
 }
@@ -1421,31 +1897,114 @@ const sounds = {
     kick: () => {
         playSound(300, 0.09, 'square', 0.22);
     },
+    spring: () => {
+        [330, 494, 740, 988].forEach((f, i) => playNote(f, i * 0.035, 0.09, 'square', 0.2));
+    },
+    sizzle: () => {
+        playSound(120, 0.3, 'sawtooth', 0.25);
+        playNote(90, 0.05, 0.35, 'square', 0.2);
+    },
 };
 
 // ---------------------------------------------------------------------------
 //  Background music: a short original chiptune loop, scheduled ahead of time
 //  through the Web Audio clock so it never drifts with frame rate.
 // ---------------------------------------------------------------------------
+// One 32-step loop per setting, so walking into a cave or a castle sounds
+// like walking into a cave or a castle. 0 = rest.
+const MUSIC_TRACKS = {
+    overworld: {
+        tempo: 0.13,
+        melody: [
+            784, 0, 988, 0, 1047, 0, 988, 784,
+            880, 0, 784, 0, 659, 0, 0, 0,
+            698, 0, 880, 0, 1047, 0, 880, 698,
+            784, 0, 659, 0, 523, 0, 0, 0,
+        ],
+        bass: [
+            262, 0, 0, 196, 262, 0, 0, 196,
+            220, 0, 0, 165, 220, 0, 0, 165,
+            175, 0, 0, 131, 175, 0, 0, 131,
+            196, 0, 0, 147, 196, 0, 247, 294,
+        ],
+        lead: 'square',
+        low: 'triangle',
+    },
+    // Slower, minor, sparse - the sound of a lot of rock overhead.
+    cavern: {
+        tempo: 0.16,
+        melody: [
+            440, 0, 0, 523, 0, 440, 0, 0,
+            392, 0, 0, 466, 0, 392, 0, 0,
+            349, 0, 415, 0, 349, 0, 0, 0,
+            330, 0, 392, 0, 440, 0, 0, 0,
+        ],
+        bass: [
+            110, 0, 110, 0, 0, 0, 104, 0,
+            98, 0, 98, 0, 0, 0, 93, 0,
+            87, 0, 87, 0, 0, 0, 82, 0,
+            110, 0, 0, 0, 82, 0, 0, 0,
+        ],
+        lead: 'triangle',
+        low: 'sine',
+    },
+    // Weightless and bright: wide leaps, plenty of air between the notes.
+    sky: {
+        tempo: 0.14,
+        melody: [
+            1047, 0, 0, 1319, 0, 1568, 0, 0,
+            1319, 0, 1047, 0, 880, 0, 0, 0,
+            988, 0, 0, 1175, 0, 1397, 0, 0,
+            1175, 0, 988, 0, 784, 0, 0, 0,
+        ],
+        bass: [
+            262, 0, 0, 0, 330, 0, 0, 0,
+            349, 0, 0, 0, 262, 0, 0, 0,
+            247, 0, 0, 0, 294, 0, 0, 0,
+            330, 0, 0, 0, 247, 0, 0, 0,
+        ],
+        lead: 'square',
+        low: 'sine',
+    },
+    // Fast, low and menacing for the last stretch.
+    castle: {
+        tempo: 0.11,
+        melody: [
+            233, 247, 233, 220, 233, 0, 175, 0,
+            233, 247, 233, 220, 233, 0, 196, 0,
+            208, 220, 208, 196, 208, 0, 156, 0,
+            233, 0, 220, 0, 208, 0, 196, 0,
+        ],
+        bass: [
+            87, 0, 87, 0, 87, 0, 87, 0,
+            82, 0, 82, 0, 82, 0, 82, 0,
+            78, 0, 78, 0, 78, 0, 78, 0,
+            73, 0, 73, 0, 87, 0, 98, 0,
+        ],
+        lead: 'sawtooth',
+        low: 'triangle',
+    },
+};
+
 const music = {
     timer: null,
     nextNoteTime: 0,
     step: 0,
-    tempo: 0.13, // seconds per step
+    trackName: 'overworld',
+    ...MUSIC_TRACKS.overworld,
 
-    // Bright major-key loop (32 steps). 0 = rest.
-    melody: [
-        784, 0, 988, 0, 1047, 0, 988, 784,
-        880, 0, 784, 0, 659, 0, 0, 0,
-        698, 0, 880, 0, 1047, 0, 880, 698,
-        784, 0, 659, 0, 523, 0, 0, 0,
-    ],
-    bass: [
-        262, 0, 0, 196, 262, 0, 0, 196,
-        220, 0, 0, 165, 220, 0, 0, 165,
-        175, 0, 0, 131, 175, 0, 0, 131,
-        196, 0, 0, 147, 196, 0, 247, 294,
-    ],
+    /** Swaps the loop. Restarts playback mid-run so a new level sounds new. */
+    setTrack(name) {
+        const track = MUSIC_TRACKS[name] || MUSIC_TRACKS.overworld;
+        if (this.trackName === name) return;
+        this.trackName = name;
+        Object.assign(this, track);
+        this.step = 0;
+        if (this.timer) {
+            this.stop();
+            this.start();
+        }
+    },
 
     start() {
         if (this.timer || gameState.muted) return;
@@ -1471,8 +2030,8 @@ const music = {
             const offset = this.nextNoteTime - ac.currentTime;
             const i = this.step % this.melody.length;
 
-            if (this.melody[i]) playNote(this.melody[i], offset, this.tempo * 0.85, 'square', 0.055);
-            if (this.bass[i]) playNote(this.bass[i], offset, this.tempo * 0.9, 'triangle', 0.075);
+            if (this.melody[i]) playNote(this.melody[i], offset, this.tempo * 0.85, this.lead, 0.055);
+            if (this.bass[i]) playNote(this.bass[i], offset, this.tempo * 0.9, this.low, 0.075);
 
             this.nextNoteTime += this.tempo;
             this.step++;
@@ -1597,6 +2156,11 @@ function moveAndCollide(entity, options = {}) {
         if (stepX === 0 && stepY === 0) break;
     }
 
+    // Remembered so the platform can carry whatever is standing on it next
+    // frame. Anything that leaves the surface drops the reference the moment
+    // it lands somewhere else - or on nothing at all.
+    entity.ridingPlatform = result.ground && result.ground.carries ? result.ground : null;
+
     return result;
 }
 
@@ -1720,6 +2284,7 @@ class Player {
         this.starTimer = 0;       // Frames of star invincibility remaining
         this.controlLock = 0;     // Frames where input is ignored (cutscenes)
         this.dying = false;       // Playing the death animation
+        this.springBounce = false; // Launched by a pad, so not a jump to cut short
         this.deathTimer = 0;
         this.deathSpin = 0;
         this.safeGround = null;   // Last solid footing, used as a checkpoint
@@ -1826,6 +2391,10 @@ class Player {
         }
         if (hit.ground) {
             this.recordSafeGround(hit.ground);
+            // Every frame you are stood on something, not only the frame you
+            // land: walking from one ledge onto the next takes the second one
+            // too. claimGround short-circuits on ledges already yours.
+            claimGround(hit.ground);
         }
 
         // Keep player in world bounds
@@ -1842,6 +2411,7 @@ class Player {
         if (this.onGround) {
             this.coyoteTime = CONFIG.COYOTE_TIME;
             this.isJumping = false;
+            this.springBounce = false;
             this.jumpTime = 0;
         } else if (this.coyoteTime > 0) {
             this.coyoteTime--;
@@ -1881,6 +2451,11 @@ class Player {
         const accel = this.onGround
             ? (wantsRun ? CONFIG.RUN_ACCELERATION : CONFIG.ACCELERATION)
             : CONFIG.AIR_ACCELERATION;
+        // Ice levels turn the grip down: you keep sliding after letting go and
+        // a turn takes real distance. Top speed and acceleration are untouched,
+        // so the level is slippery without being sluggish.
+        const grip = CONFIG.surfaceGrip;
+        const groundFriction = 1 - (1 - CONFIG.FRICTION) * grip;
 
         const moving = input.left !== input.right;
         this.skidding = false;
@@ -1892,7 +2467,7 @@ class Player {
             // Turning around on the ground gives a fast, visible skid - this is
             // most of what makes Mario's momentum readable.
             if (turning && this.onGround) {
-                this.velocityX += wanted * CONFIG.TURN_DECELERATION;
+                this.velocityX += wanted * CONFIG.TURN_DECELERATION * grip;
                 this.skidding = Math.abs(this.velocityX) > 1.5;
                 if (this.skidding && this.animTime % 4 === 0) {
                     createSkidDust(this.x + this.width / 2, this.y + this.height - 2, -wanted);
@@ -1904,7 +2479,7 @@ class Player {
             this.velocityX = clamp(this.velocityX, -topSpeed, topSpeed);
             this.direction = wanted;
         } else {
-            this.velocityX *= this.onGround ? CONFIG.FRICTION : CONFIG.AIR_FRICTION;
+            this.velocityX *= this.onGround ? groundFriction : CONFIG.AIR_FRICTION;
             if (Math.abs(this.velocityX) < 0.08) this.velocityX = 0;
         }
 
@@ -1938,6 +2513,7 @@ class Player {
             this.jumpBuffer = 0;
             this.coyoteTime = 0;
             this.squash = 1.25;
+            this.springBounce = false;
             sounds.jump();
             createJumpDust(this.x + this.width / 2, this.y + this.height);
             haptics.light();
@@ -1949,8 +2525,11 @@ class Player {
             this.velocityY += CONFIG.JUMP_HOLD_GRAVITY;
             this.jumpTime++;
         } else {
-            // Releasing early cuts the jump short.
-            if (this.isJumping && !input.jump && this.velocityY < CONFIG.JUMP_CUT_THRESHOLD) {
+            // Releasing early cuts the jump short - but a bounce pad is not
+            // your jump to cut. Landing on one with the button up used to give
+            // 45% of the launch, which read as the pad being broken.
+            if (this.isJumping && !input.jump && !this.springBounce &&
+                this.velocityY < CONFIG.JUMP_CUT_THRESHOLD) {
                 this.velocityY *= CONFIG.JUMP_CUT;
                 this.jumpTime = CONFIG.MAX_JUMP_HOLD_TIME;
             }
@@ -2055,12 +2634,31 @@ class Player {
         this.safeGround = { x: this.x, y: surface.y - this.height };
     }
 
+    /**
+     * Backs a checkpoint away from the edge it is standing near. Dying at a
+     * chasm used to drop you a stride from the same chasm, with no room left
+     * to build up speed - so you fell in again, and again. A running jump
+     * needs about 200px of approach, and this makes sure the respawn has it.
+     */
+    withRunway(spot) {
+        const RUNWAY = 220;
+        const segment = platforms.find(p => p.variant === 'ground' &&
+            spot.x >= p.x && spot.x + this.width <= p.x + p.width);
+        if (!segment) return { ...spot };
+
+        const toEdge = (segment.x + segment.width) - (spot.x + this.width);
+        if (toEdge >= RUNWAY) return { ...spot };
+
+        const wanted = segment.x + segment.width - this.width - RUNWAY;
+        return { x: Math.max(segment.x + 24, wanted), y: spot.y };
+    }
+
     getRandomRespawnLocation() {
         // In the multiplayer arena, dropping back in anywhere keeps things
         // moving. In single player that felt random and disorienting, so
         // respawn where the player last had their feet on solid ground.
         if (!multiplayerState.connected) {
-            if (this.safeGround) return { ...this.safeGround };
+            if (this.safeGround) return this.withRunway(this.safeGround);
             return { x: 80, y: GROUND_Y - this.height };
         }
 
@@ -3494,14 +4092,16 @@ class Block {
             ctx.textBaseline = 'middle';
             ctx.fillText('?', screenX + this.width / 2, screenY + this.height / 2 + 1);
         } else if (this.used || this.type === 'solid') {
+            // Spent and solid blocks are cut from whatever this world is made
+            // of, so a cave column is rock and a castle column is masonry.
             const gradient = ctx.createLinearGradient(screenX, screenY, screenX, screenY + this.height);
-            gradient.addColorStop(0, '#A0763F');
-            gradient.addColorStop(1, '#6E4B22');
+            gradient.addColorStop(0, theme.block[0]);
+            gradient.addColorStop(1, theme.block[1]);
             ctx.fillStyle = gradient;
             ctx.beginPath();
             ctx.roundRect(screenX, screenY, this.width, this.height, 4);
             ctx.fill();
-            ctx.strokeStyle = '#4A3113';
+            ctx.strokeStyle = theme.blockEdge;
             ctx.lineWidth = 2;
             ctx.stroke();
             ctx.fillStyle = 'rgba(0,0,0,0.18)';
@@ -3509,12 +4109,12 @@ class Block {
         } else {
             // Brick
             const gradient = ctx.createLinearGradient(screenX, screenY, screenX, screenY + this.height);
-            gradient.addColorStop(0, '#D2691E');
-            gradient.addColorStop(1, '#A0522D');
+            gradient.addColorStop(0, theme.brick[0]);
+            gradient.addColorStop(1, theme.brick[1]);
             ctx.fillStyle = gradient;
             ctx.fillRect(screenX, screenY, this.width, this.height);
 
-            ctx.strokeStyle = 'rgba(60,25,10,0.7)';
+            ctx.strokeStyle = theme.mortar;
             ctx.lineWidth = 2;
             ctx.strokeRect(screenX + 1, screenY + 1, this.width - 2, this.height - 2);
 
@@ -4088,8 +4688,10 @@ class Coin {
 
 class Platform {
     /**
-     * @param {string} variant 'brick' | 'ground' | 'cloud'
-     * Cloud platforms are one-way: you can jump up through them.
+     * @param {string} variant 'brick' | 'ground' | 'cloud' | 'metal'
+     * Cloud platforms are one-way: you can jump up through them. What a cloud
+     * actually looks like is up to the theme - planks underground, ice shelves
+     * in the mountains, scorched stone in the castle.
      */
     constructor(x, y, width, height, variant = 'brick') {
         this.x = x;
@@ -4112,7 +4714,9 @@ class Platform {
 
         if (this.variant === 'cloud') {
             // Drawn unclipped so the puffs can billow past the collision box
-            this.drawCloudPlatform(screenX, screenY);
+            this.drawOneWay(screenX, screenY);
+        } else if (this.variant === 'metal') {
+            this.drawMetal(screenX, screenY);
         } else {
             ctx.beginPath();
             ctx.rect(screenX, screenY, this.width, this.height);
@@ -4125,33 +4729,65 @@ class Platform {
         }
 
         ctx.restore();
+
+        this.drawOwner(screenX, screenY);
+    }
+
+    /**
+     * Paints a captured ledge in its owner's colour. A wash rather than a fill,
+     * so the brick or the planks still read through it and the level does not
+     * turn into a bar chart, plus a solid bar along the standing surface -
+     * which is the edge you actually aim at from across a gap.
+     */
+    drawOwner(screenX, screenY) {
+        const palette = territoryPalette(territoryOwnerOf(this));
+        if (!palette) return;
+
+        ctx.save();
+
+        ctx.globalAlpha = 0.34;
+        ctx.fillStyle = palette.shirt;
+        ctx.fillRect(screenX, screenY, this.width, this.height);
+
+        // The lip, at full strength. Read from a distance this is the whole
+        // signal: whose ledge is that one over there.
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = palette.shirt;
+        ctx.fillRect(screenX, screenY - 3, this.width, 4);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+        ctx.fillRect(screenX, screenY - 3, this.width, 1);
+
+        ctx.restore();
     }
 
     drawGround(screenX, screenY) {
         const soil = ctx.createLinearGradient(0, screenY, 0, screenY + this.height);
-        soil.addColorStop(0, '#A9663A');
-        soil.addColorStop(0.25, '#8B4513');
-        soil.addColorStop(1, '#5C3010');
+        soil.addColorStop(0, theme.soil[0]);
+        soil.addColorStop(0.25, theme.soil[1]);
+        soil.addColorStop(1, theme.soil[2]);
         ctx.fillStyle = soil;
         ctx.fillRect(screenX, screenY, this.width, this.height);
 
-        // Grass cap
-        ctx.fillStyle = '#3FA34D';
+        // Surface cap - grass, sand, frost or scorched rock
+        ctx.fillStyle = theme.turf[0];
         ctx.fillRect(screenX, screenY, this.width, 10);
-        ctx.fillStyle = '#5FD068';
+        ctx.fillStyle = theme.turf[1];
         ctx.fillRect(screenX, screenY, this.width, 4);
 
-        // Grass blades along the top edge
-        ctx.strokeStyle = '#3FA34D';
-        ctx.lineWidth = 2;
         const start = Math.floor(this.x / 16) * 16;
-        for (let wx = start; wx < this.x + this.width; wx += 16) {
-            const sx = wx - gameState.camera.x;
-            ctx.beginPath();
-            ctx.moveTo(sx, screenY);
-            ctx.lineTo(sx + 3, screenY - 6);
-            ctx.lineTo(sx + 6, screenY);
-            ctx.stroke();
+
+        // Grass blades along the top edge
+        if (theme.blades) {
+            ctx.strokeStyle = theme.turf[0];
+            ctx.lineWidth = 2;
+            for (let wx = start; wx < this.x + this.width; wx += 16) {
+                const sx = wx - gameState.camera.x;
+                ctx.beginPath();
+                ctx.moveTo(sx, screenY);
+                ctx.lineTo(sx + 3, screenY - 6);
+                ctx.lineTo(sx + 6, screenY);
+                ctx.stroke();
+            }
         }
 
         // Pebbles for texture
@@ -4166,8 +4802,8 @@ class Platform {
 
     drawBrick(screenX, screenY) {
         const stone = ctx.createLinearGradient(0, screenY, 0, screenY + this.height);
-        stone.addColorStop(0, '#E08A4A');
-        stone.addColorStop(1, '#A0522D');
+        stone.addColorStop(0, theme.brick[0]);
+        stone.addColorStop(1, theme.brick[1]);
         ctx.fillStyle = stone;
         ctx.fillRect(screenX, screenY, this.width, this.height);
 
@@ -4189,6 +4825,16 @@ class Platform {
         ctx.fillRect(screenX, screenY, this.width, 3);
         ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
         ctx.fillRect(screenX, screenY + this.height - 4, this.width, 4);
+    }
+
+    /** One-way platforms, dressed for whichever world they are standing in. */
+    drawOneWay(screenX, screenY) {
+        switch (theme.oneWay) {
+            case 'plank': return this.drawPlankPlatform(screenX, screenY);
+            case 'ice': return this.drawIcePlatform(screenX, screenY);
+            case 'ember': return this.drawEmberPlatform(screenX, screenY);
+            default: return this.drawCloudPlatform(screenX, screenY);
+        }
     }
 
     drawCloudPlatform(screenX, screenY) {
@@ -4217,6 +4863,356 @@ class Platform {
         ctx.roundRect(screenX, screenY - 1, this.width, 4, 2);
         ctx.fill();
     }
+
+    // Mine scaffolding: boards with a shadowed gap between them.
+    drawPlankPlatform(screenX, screenY) {
+        ctx.fillStyle = '#6B4A2F';
+        ctx.fillRect(screenX, screenY, this.width, this.height);
+        ctx.fillStyle = '#8A6340';
+        ctx.fillRect(screenX, screenY, this.width, 4);
+        ctx.strokeStyle = 'rgba(35, 20, 10, 0.65)';
+        ctx.lineWidth = 2;
+        for (let bx = 0; bx < this.width; bx += 40) {
+            ctx.beginPath();
+            ctx.moveTo(screenX + bx, screenY);
+            ctx.lineTo(screenX + bx, screenY + this.height);
+            ctx.stroke();
+        }
+        // Iron studs at each end
+        ctx.fillStyle = 'rgba(210, 210, 220, 0.7)';
+        [6, this.width - 10].forEach(bx => {
+            ctx.beginPath();
+            ctx.arc(screenX + bx, screenY + this.height / 2, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    }
+
+    // A shelf of clear ice: pale, translucent, with a lit top edge.
+    drawIcePlatform(screenX, screenY) {
+        ctx.fillStyle = 'rgba(196, 230, 255, 0.85)';
+        ctx.beginPath();
+        ctx.roundRect(screenX, screenY, this.width, this.height + 6, 4);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.fillRect(screenX, screenY, this.width, 3);
+        // Icicles hanging off the underside
+        ctx.fillStyle = 'rgba(210, 238, 255, 0.9)';
+        for (let bx = 8; bx < this.width - 6; bx += 26) {
+            const drop = 7 + ((bx / 26) % 3) * 5;
+            ctx.beginPath();
+            ctx.moveTo(screenX + bx - 4, screenY + this.height + 4);
+            ctx.lineTo(screenX + bx, screenY + this.height + 4 + drop);
+            ctx.lineTo(screenX + bx + 4, screenY + this.height + 4);
+            ctx.fill();
+        }
+    }
+
+    // Scorched stone with heat still glowing through the cracks.
+    drawEmberPlatform(screenX, screenY) {
+        ctx.fillStyle = '#2E1C18';
+        ctx.beginPath();
+        ctx.roundRect(screenX, screenY, this.width, this.height + 4, 3);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255, 140, 50, 0.85)';
+        ctx.fillRect(screenX, screenY, this.width, 3);
+        ctx.fillStyle = 'rgba(255, 90, 20, 0.5)';
+        for (let bx = 10; bx < this.width - 6; bx += 30) {
+            ctx.fillRect(screenX + bx, screenY + this.height - 2, 12, 3);
+        }
+    }
+
+    // Riveted steel - the look of anything that moves under its own power.
+    drawMetal(screenX, screenY) {
+        const plate = ctx.createLinearGradient(0, screenY, 0, screenY + this.height);
+        plate.addColorStop(0, '#B9C2CC');
+        plate.addColorStop(0.5, '#7C8896');
+        plate.addColorStop(1, '#49535F');
+        ctx.fillStyle = plate;
+        ctx.beginPath();
+        ctx.roundRect(screenX, screenY, this.width, this.height, 4);
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fillRect(screenX + 3, screenY + 2, this.width - 6, 2);
+
+        // Bolts, spaced so a long platform reads as one built thing
+        ctx.fillStyle = 'rgba(30, 36, 44, 0.75)';
+        for (let bx = 8; bx < this.width - 4; bx += 24) {
+            ctx.beginPath();
+            ctx.arc(screenX + bx, screenY + this.height / 2 + 1, 2.2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Warning stripe underneath, the way service platforms are painted
+        ctx.fillStyle = 'rgba(240, 190, 60, 0.9)';
+        for (let bx = 0; bx < this.width; bx += 16) {
+            ctx.fillRect(screenX + bx, screenY + this.height - 4, 8, 4);
+        }
+    }
+}
+
+/**
+ * A platform that runs a fixed patrol and carries whatever is standing on it.
+ * Movement is linear and deterministic - no sine, no randomness - so every
+ * player, and every replay of a level, sees the same platform in the same
+ * place at the same moment.
+ */
+class MovingPlatform extends Platform {
+    /**
+     * @param {object} opts axis 'x'|'y', range (px each way from the start),
+     *   speed (px per step), offset (fraction 0-1 along the run to start at),
+     *   dir (1 or -1).
+     */
+    constructor(x, y, width, opts = {}) {
+        super(x, y, width, PLATFORM_THICKNESS, 'metal');
+        this.axis = opts.axis === 'y' ? 'y' : 'x';
+        this.range = opts.range === undefined ? 160 : opts.range;
+        this.speed = opts.speed === undefined ? 1.1 : opts.speed;
+        this.homeX = x;
+        this.homeY = y;
+        this.dir = opts.dir === -1 ? -1 : 1;
+        this.carries = true;
+        this.dx = 0;
+        this.dy = 0;
+
+        // Start part-way along the run so a row of platforms can be staggered.
+        // 0 is the laid-out position, 1 and -1 are the ends of the patrol.
+        const offset = clamp(opts.offset || 0, -1, 1) * this.range;
+        if (this.axis === 'x') this.x = x + offset;
+        else this.y = y + offset;
+    }
+
+    // The whole stretch of world this platform sweeps through, which is what
+    // level checks care about - not wherever it happens to be right now.
+    get travel() {
+        const spanX = this.axis === 'x' ? this.range : 0;
+        const spanY = this.axis === 'y' ? this.range : 0;
+        return {
+            x: this.homeX - spanX,
+            y: this.homeY - spanY,
+            width: this.width + spanX * 2,
+            height: this.height + spanY * 2,
+        };
+    }
+
+    update() {
+        const key = this.axis === 'x' ? 'x' : 'y';
+        const home = this.axis === 'x' ? this.homeX : this.homeY;
+        const before = this[key];
+
+        let next = before + this.dir * this.speed;
+        if (next > home + this.range) {
+            next = home + this.range;
+            this.dir = -1;
+        } else if (next < home - this.range) {
+            next = home - this.range;
+            this.dir = 1;
+        }
+
+        this[key] = next;
+        this.dx = this.axis === 'x' ? next - before : 0;
+        this.dy = this.axis === 'y' ? next - before : 0;
+    }
+}
+
+// ============================================================================
+//  HAZARDS - lava and spikes. Not solid: you pass straight into them, which
+//  is rather the point.
+// ============================================================================
+
+class Hazard {
+    /** @param {string} variant 'lava' | 'spikes' */
+    constructor(x, y, width, height, variant = 'spikes') {
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.variant = variant;
+        this.animation = 0;
+    }
+
+    update() {
+        this.animation += 0.05;
+
+        if (!player || player.dying || player.outOfLives) return;
+        if (!player.checkCollision(this)) return;
+
+        if (this.variant === 'lava') {
+            // A star throws you clear of the lava rather than saving you in it.
+            if (player.immune) {
+                player.velocityY = CONFIG.SPRING_POWER;
+                return;
+            }
+            player.health = 1;
+            sounds.sizzle();
+            screenShake(8, 20);
+            createParticles(player.x + player.width / 2, this.y, 14, '#FF7A18');
+            player.startDeath();
+        } else {
+            if (player.immune) return;
+            createParticles(player.x + player.width / 2, player.y + player.height, 8, '#C0C6D0');
+            player.hit();
+        }
+    }
+
+    draw() {
+        const screenX = this.x - gameState.camera.x;
+        const screenY = this.y - gameState.camera.y;
+        if (screenX + this.width < -20 || screenX > view.w + 20) return;
+
+        ctx.save();
+        if (this.variant === 'lava') this.drawLava(screenX, screenY);
+        else this.drawSpikes(screenX, screenY);
+        ctx.restore();
+    }
+
+    drawLava(screenX, screenY) {
+        const molten = ctx.createLinearGradient(0, screenY, 0, screenY + this.height);
+        molten.addColorStop(0, '#FFD24A');
+        molten.addColorStop(0.35, '#FF7A18');
+        molten.addColorStop(1, '#8E1B05');
+        ctx.fillStyle = molten;
+        ctx.fillRect(screenX, screenY + 6, this.width, this.height - 6);
+
+        // A slow rolling surface, drawn from the shared animation clock so it
+        // never depends on frame rate.
+        ctx.fillStyle = '#FFC24A';
+        ctx.beginPath();
+        ctx.moveTo(screenX, screenY + 10);
+        for (let bx = 0; bx <= this.width; bx += 10) {
+            const wave = Math.sin(this.animation * 2 + (this.x + bx) / 40) * 4;
+            ctx.lineTo(screenX + bx, screenY + 8 + wave);
+        }
+        ctx.lineTo(screenX + this.width, screenY + 16);
+        ctx.lineTo(screenX, screenY + 16);
+        ctx.closePath();
+        ctx.fill();
+
+        // Glow above the pool
+        const glow = ctx.createLinearGradient(0, screenY - 40, 0, screenY + 10);
+        glow.addColorStop(0, 'rgba(255, 110, 20, 0)');
+        glow.addColorStop(1, 'rgba(255, 140, 40, 0.35)');
+        ctx.fillStyle = glow;
+        ctx.fillRect(screenX, screenY - 40, this.width, 50);
+
+        // Bubbles
+        ctx.fillStyle = 'rgba(255, 230, 150, 0.8)';
+        for (let bx = 20; bx < this.width; bx += 70) {
+            const t = (this.animation * 0.6 + bx / 70) % 1;
+            const radius = 3 * (1 - t) + 1;
+            ctx.beginPath();
+            ctx.arc(screenX + bx, screenY + 14 - t * 10, radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    drawSpikes(screenX, screenY) {
+        const tooth = 20;
+        ctx.fillStyle = '#8A94A6';
+        ctx.strokeStyle = 'rgba(20, 24, 34, 0.6)';
+        ctx.lineWidth = 1.5;
+        for (let bx = 0; bx + tooth <= this.width; bx += tooth) {
+            ctx.beginPath();
+            ctx.moveTo(screenX + bx, screenY + this.height);
+            ctx.lineTo(screenX + bx + tooth / 2, screenY);
+            ctx.lineTo(screenX + bx + tooth, screenY + this.height);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            // Highlight down the lit side of each tooth
+            ctx.fillStyle = 'rgba(255,255,255,0.45)';
+            ctx.beginPath();
+            ctx.moveTo(screenX + bx + tooth / 2, screenY);
+            ctx.lineTo(screenX + bx + tooth / 2 - 3, screenY + this.height);
+            ctx.lineTo(screenX + bx + tooth / 2 + 1, screenY + this.height);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = '#8A94A6';
+        }
+        // Base rail so the teeth do not float
+        ctx.fillStyle = '#5A6478';
+        ctx.fillRect(screenX, screenY + this.height - 4, this.width, 4);
+    }
+}
+
+// ============================================================================
+//  SPRINGS - a bounce pad. Not solid either: it catches you on the way down
+//  and throws you back up, higher if you are holding jump as you land.
+// ============================================================================
+
+class Spring {
+    constructor(x, surfaceY) {
+        this.width = 40;
+        this.height = 26;
+        this.x = x;
+        this.y = surfaceY - this.height;
+        this.compression = 0;   // 1 = fully squashed, eases back to 0
+        this.cooldown = 0;
+    }
+
+    update() {
+        this.compression = lerp(this.compression, 0, 0.15);
+        if (this.cooldown > 0) this.cooldown--;
+
+        if (!player || player.dying || player.outOfLives) return;
+        if (this.cooldown > 0 || player.velocityY < 0) return;
+
+        // Only the top of the pad launches you; brushing the side does nothing.
+        const head = { x: this.x, y: this.y - 6, width: this.width, height: 14 };
+        if (!player.checkCollision(head)) return;
+
+        const held = player.jumpHeld;
+        player.y = this.y - player.height;
+        player.velocityY = held ? CONFIG.SPRING_POWER_HELD : CONFIG.SPRING_POWER;
+        player.onGround = false;
+        player.isJumping = true;
+        player.springBounce = true;
+        player.jumpTime = 0;
+        player.squash = 1.35;
+        this.compression = 1;
+        this.cooldown = 6;
+        sounds.spring();
+        haptics.medium();
+        createJumpDust(this.x + this.width / 2, this.y + this.height);
+    }
+
+    draw() {
+        const screenX = this.x - gameState.camera.x;
+        if (screenX + this.width < -20 || screenX > view.w + 20) return;
+
+        const squash = this.compression * 12;
+        const topY = this.y - gameState.camera.y + squash;
+        const baseY = this.y + this.height - gameState.camera.y;
+
+        ctx.save();
+        // Base plate
+        ctx.fillStyle = '#4A4A55';
+        ctx.beginPath();
+        ctx.roundRect(screenX, baseY - 6, this.width, 6, 2);
+        ctx.fill();
+
+        // Coil
+        ctx.strokeStyle = '#C0392B';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        const coils = 3;
+        for (let i = 0; i <= coils; i++) {
+            const t = i / coils;
+            const y = baseY - 6 - (baseY - 6 - (topY + 8)) * t;
+            ctx.moveTo(screenX + 6, y);
+            ctx.lineTo(screenX + this.width - 6, y - 4);
+        }
+        ctx.stroke();
+
+        // Top plate
+        ctx.fillStyle = '#E74C3C';
+        ctx.beginPath();
+        ctx.roundRect(screenX - 2, topY, this.width + 4, 10, 3);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.fillRect(screenX + 2, topY + 2, this.width, 2);
+        ctx.restore();
+    }
 }
 
 // ============================================================================
@@ -4230,6 +5226,9 @@ let platforms = [];
 let portals = [];
 let blocks = [];
 let powerUps = [];
+let hazards = [];
+let springs = [];
+let movers = [];        // The subset of platforms that move, kept for the tick
 let flagpole = null;
 
 // ============================================================================
@@ -4286,12 +5285,12 @@ const GROUND_Y = CONFIG.WORLD_HEIGHT - 50;
 const GROUND_DEPTH = 420;
 
 // ---------------------------------------------------------------------------
-//  The level is laid out on a 40px grid - one cell is exactly the player's
-//  width and a big player's height. Building on the grid is what keeps every
-//  gap either genuinely passable or honestly solid: a hand-placed level ends
-//  up with 20 and 30px slots that look like openings but are too tight to
-//  walk into. Tiers are spaced GRID * 3 apart, comfortably inside the ~158px
-//  a standing jump clears, so every layer is reachable from the one below.
+//  Levels are laid out on a 40px grid - one cell is exactly the player's width
+//  and a big player's height. Building on the grid is what keeps every gap
+//  either genuinely passable or honestly solid: a hand-placed level ends up
+//  with 20 and 30px slots that look like openings but are too tight to walk
+//  into. Tiers are spaced GRID * 3 apart, comfortably inside the ~158px a
+//  standing jump clears, so every layer is reachable from the one below.
 // ---------------------------------------------------------------------------
 const GRID = 40;
 const TIER = {
@@ -4306,66 +5305,317 @@ const CLOUD_THICKNESS = 14;
 // can still head-butt them from below.
 const BLOCK_ROW_Y = GROUND_Y - GRID * 4;   // 390, so the row spans 390-430
 
-// Solid stretches of ground; the gaps between them are the pits.
-const GROUND_SEGMENTS = [
-    { x: 0, width: 840 },
-    { x: 960, width: 720 },
-    { x: 1800, width: 760 },
-    { x: 2680, width: 920 },
+/** Level data says 'low' or a raw pixel height; both mean a y coordinate. */
+function tierY(value) {
+    return typeof value === 'string' ? TIER[value] : value;
+}
+
+// ============================================================================
+//  LEVEL DESIGNS
+//  A campaign, not a single stage on repeat. Each entry is pure data: where
+//  the ground breaks, what to stand on, what wants to kill you, and what the
+//  whole thing looks and sounds like. Every design is checked by the geometry
+//  suite in tests.html, so a level that reads well here also plays.
+//
+//  Fields, all optional except ground/flag/width:
+//    ground   [x, width]                 solid stretches; the gaps are pits
+//    solids   [tier, x, width]           standing platforms
+//    oneWay   [x, width, tier]           jump up through these
+//    movers   {x, y, width, axis, range, speed, offset}  carries you along
+//    walls    [x, blocksTall]            block pillars rising from the ground
+//    blocks   {x, y, items}              question/brick rows at head height
+//    hazards  [variant, x, width, y]     'lava' or 'spikes'
+//    springs  [x, tier]                  bounce pads
+//    enemies  [type, x, tier]
+//    portals  [type, x, tier]            pipes that keep spawning enemies
+//    coins    {x, y, count, spacing}     extra trails on top of the automatic ones
+//    stair    {x, steps}                 the run-in to the flag
+// ============================================================================
+
+const LEVELS = [
+    // ------------------------------------------------------------------
+    //  1. Where everyone starts. Wide ledges, short pits, one enemy type
+    //     at a time - room to learn what a jump feels like.
+    // ------------------------------------------------------------------
+    {
+        name: 'Green Hills',
+        blurb: 'Reach the flag!',
+        theme: 'overworld',
+        width: 3600,
+        time: 300,
+        ground: [[0, 840], [960, 720], [1800, 760], [2680, 920]],
+        solids: [
+            ['low', 240, 200], ['low', 560, 160], ['low', 1040, 200], ['low', 1400, 160],
+            ['low', 1880, 200], ['low', 2240, 160], ['low', 2760, 200],
+            ['mid', 400, 160], ['mid', 800, 160], ['mid', 1280, 160], ['mid', 1640, 160],
+            ['mid', 2120, 160], ['mid', 2480, 160], ['mid', 2960, 160],
+        ],
+        oneWay: [[280, 160], [880, 160], [1520, 160], [2160, 160], [2720, 160]],
+        blocks: [
+            // The first mushroom sits in a pocket: a power-up released here
+            // walks right into the pipe at x=460 and back into the world edge,
+            // so it can never reach the pit at 840. The block by that pit holds
+            // a coin instead, which stays put.
+            { x: 120, items: [['brick', null], ['question', 'mushroom'], ['brick', null]] },
+            { x: 760, items: [['question', 'coin']] },
+            // The star sat 80px from the pit at 1680; from here it has 640px of run.
+            { x: 960, items: [['question', 'star'], ['brick', null]] },
+            { x: 1280, items: [['brick', null], ['question', 'coin', 3], ['brick', null]] },
+            { x: 1560, items: [['brick', null], ['question', 'coin']] },
+            { x: 2400, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
+            { x: 2680, items: [['question', 'mushroom'], ['brick', null]] },
+        ],
+        enemies: [
+            ['normal', 480, 'ground'], ['normal', 620, 'low'], ['normal', 1120, 'low'],
+            ['normal', 1460, 'ground'], ['normal', 2000, 'low'], ['normal', 2300, 'low'],
+            ['normal', 2840, 'ground'],
+            ['jumping', 1240, 'ground'], ['jumping', 2520, 'mid'],
+            ['turtle', 700, 'ground'], ['turtle', 1920, 'low'], ['turtle', 3000, 'ground'],
+        ],
+        portals: [['normal', 460, 'ground'], ['jumping', 1920, 'low'], ['turtle', 2160, 'ground']],
+        stair: { x: 3200, steps: 4 },
+        flag: 3440,
+    },
+
+    // ------------------------------------------------------------------
+    //  2. The same rules, further apart. Wider pits, and bounce pads that
+    //     throw you into the cloud line where the coins are.
+    // ------------------------------------------------------------------
+    {
+        name: 'Cobalt Coast',
+        blurb: 'Mind the gaps - bounce pads ahead',
+        theme: 'coast',
+        width: 4000,
+        time: 300,
+        ground: [[0, 720], [920, 560], [1680, 640], [2520, 480], [3160, 840]],
+        solids: [
+            ['low', 200, 160], ['low', 1000, 160], ['low', 1760, 200], ['low', 2600, 160],
+            ['low', 3280, 160],
+            ['mid', 400, 160], ['mid', 1240, 200], ['mid', 2000, 160], ['mid', 2800, 200],
+            ['mid', 3400, 120],
+        ],
+        oneWay: [[280, 160], [1080, 200], [1840, 160], [2640, 200], [3360, 160]],
+        blocks: [
+            { x: 280, items: [['brick', null], ['question', 'mushroom'], ['brick', null]] },
+            // On top of the ledge, not stacked on the pipe below it: a pipe
+            // with a ledge and a block row over it walls off the ground route.
+            { x: 1040, items: [['question', 'coin', 3], ['brick', null]] },
+            { x: 1840, items: [['question', 'star'], ['brick', null]] },
+            { x: 2560, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
+            { x: 3200, items: [['question', 'mushroom'], ['brick', null]] },
+        ],
+        springs: [[120, 'ground'], [2160, 'ground'], [2760, 'ground']],
+        enemies: [
+            ['normal', 220, 'low'], ['normal', 1100, 'ground'], ['turtle', 1800, 'low'],
+            ['normal', 2000, 'ground'], ['jumping', 2700, 'ground'], ['turtle', 3300, 'low'],
+            ['normal', 3400, 'ground'],
+        ],
+        portals: [['normal', 1200, 'ground'], ['jumping', 2560, 'ground'], ['turtle', 3480, 'ground']],
+        stair: { x: 3600, steps: 4 },
+        flag: 3840,
+    },
+
+    // ------------------------------------------------------------------
+    //  3. Underground. The floor bites, rock pillars break up every run-up,
+    //     and a kicked shell finally has walls to come back off.
+    // ------------------------------------------------------------------
+    {
+        name: 'Crystal Caverns',
+        blurb: 'Watch your footing',
+        theme: 'cave',
+        width: 4000,
+        time: 280,
+        ground: [[0, 600], [760, 880], [1800, 520], [2440, 720], [3320, 680]],
+        solids: [
+            ['low', 160, 160], ['low', 840, 200], ['low', 1880, 160], ['low', 2520, 200],
+            ['low', 3400, 160],
+            ['mid', 360, 160], ['mid', 1120, 200], ['mid', 2080, 160], ['mid', 2760, 200],
+            ['mid', 3560, 120],
+        ],
+        oneWay: [[600, 160], [1440, 200], [2280, 160], [3040, 200]],
+        walls: [[400, 2], [1200, 3], [2080, 2], [2880, 3], [3600, 2]],
+        blocks: [
+            { x: 240, items: [['brick', null], ['question', 'mushroom'], ['brick', null]] },
+            { x: 1440, items: [['question', 'coin', 3], ['brick', null]] },
+            { x: 2600, items: [['brick', null], ['question', 'star'], ['brick', null]] },
+            { x: 3040, items: [['question', 'coin'], ['brick', null]] },
+        ],
+        hazards: [['spikes', 880, 120], ['spikes', 2160, 120], ['spikes', 3440, 80]],
+        enemies: [
+            ['turtle', 300, 'ground'], ['normal', 900, 'low'], ['turtle', 1300, 'ground'],
+            ['jumping', 1900, 'ground'], ['normal', 2100, 'mid'], ['turtle', 2540, 'low'],
+            ['normal', 3000, 'ground'], ['jumping', 3500, 'ground'],
+        ],
+        portals: [['turtle', 1080, 'ground'], ['normal', 2440, 'ground'], ['jumping', 3320, 'ground']],
+        stair: { x: 3720, steps: 4 },
+        flag: 3920,
+    },
+
+    // ------------------------------------------------------------------
+    //  4. Almost no floor at all. Three chasms, crossed on platforms that
+    //     will not wait for you.
+    // ------------------------------------------------------------------
+    {
+        name: 'Skyward Steps',
+        blurb: 'The floor is optional',
+        theme: 'sky',
+        width: 4400,
+        time: 300,
+        ground: [[0, 480], [1200, 320], [2400, 320], [3560, 840]],
+        solids: [['low', 160, 160], ['low', 3680, 160], ['mid', 2480, 160]],
+        oneWay: [
+            [240, 160], [1240, 200], [2440, 200], [3760, 200],
+            // The stepping stones across the three gaps.
+            [560, 160, 'low'], [1560, 120, 'low'], [2040, 120, 'mid'],
+            [2760, 160, 'low'], [3200, 160, 'low'],
+        ],
+        movers: [
+            { x: 880, y: 'low', width: 120, axis: 'x', range: 120, speed: 1.2 },
+            { x: 1800, y: 'mid', width: 120, axis: 'y', range: 100, speed: 0.9 },
+            { x: 2240, y: 'low', width: 120, axis: 'x', range: 80, speed: 1.4, offset: 1 },
+            { x: 3000, y: 'low', width: 120, axis: 'y', range: 120, speed: 1 },
+            { x: 3480, y: 'low', width: 120, axis: 'x', range: 80, speed: 1.5 },
+        ],
+        blocks: [
+            { x: 1240, items: [['question', 'mushroom'], ['brick', null]] },
+            { x: 3640, items: [['brick', null], ['question', 'star'], ['brick', null]] },
+        ],
+        springs: [[320, 'ground'], [1360, 'ground'], [4000, 'ground']],
+        enemies: [
+            ['jumping', 300, 'ground'], ['jumping', 1300, 'ground'], ['normal', 2500, 'ground'],
+            ['jumping', 3700, 'ground'], ['normal', 3900, 'ground'], ['turtle', 3980, 'ground'],
+        ],
+        portals: [['jumping', 1220, 'ground'], ['normal', 3880, 'ground']],
+        stair: { x: 4040, steps: 4 },
+        flag: 4280,
+    },
+
+    // ------------------------------------------------------------------
+    //  5. Night, and nothing to grip. Momentum carries further than you
+    //     mean it to, which is the whole level.
+    // ------------------------------------------------------------------
+    {
+        name: 'Frostbite Pass',
+        blurb: 'Slippery going',
+        theme: 'ice',
+        width: 4400,
+        time: 300,
+        grip: 0.35,
+        ground: [[0, 720], [880, 680], [1720, 640], [2560, 720], [3440, 960]],
+        solids: [
+            ['low', 200, 160], ['low', 960, 200], ['low', 1800, 160], ['low', 2640, 200],
+            ['low', 3520, 160],
+            ['mid', 440, 160], ['mid', 1240, 200], ['mid', 2040, 200], ['mid', 2920, 160],
+            ['mid', 3760, 160],
+        ],
+        oneWay: [[320, 160], [1120, 160], [1920, 200], [2760, 160], [3640, 200]],
+        movers: [
+            { x: 1440, y: 'low', width: 120, axis: 'x', range: 100, speed: 1.3 },
+            { x: 2320, y: 'mid', width: 120, axis: 'y', range: 110, speed: 0.9 },
+            { x: 3200, y: 'low', width: 160, axis: 'x', range: 120, speed: 1.5 },
+        ],
+        blocks: [
+            { x: 280, items: [['brick', null], ['question', 'mushroom'], ['brick', null]] },
+            { x: 1000, items: [['question', 'coin', 3], ['brick', null]] },
+            { x: 1840, items: [['question', 'star'], ['brick', null]] },
+            { x: 2200, items: [['brick', null], ['question', 'coin']] },
+            { x: 2640, items: [['question', 'mushroom'], ['brick', null], ['question', 'coin']] },
+        ],
+        hazards: [['spikes', 600, 80], ['spikes', 2000, 120], ['spikes', 3000, 80]],
+        springs: [[1160, 'ground'], [1960, 'ground'], [3720, 'ground']],
+        enemies: [
+            ['turtle', 300, 'ground'], ['normal', 1100, 'low'], ['turtle', 1300, 'ground'],
+            ['jumping', 1900, 'ground'], ['normal', 2100, 'mid'], ['turtle', 2700, 'ground'],
+            ['normal', 2900, 'ground'], ['jumping', 3600, 'ground'], ['turtle', 4000, 'ground'],
+        ],
+        portals: [['turtle', 1200, 'ground'], ['normal', 2600, 'ground'], ['jumping', 3800, 'ground']],
+        stair: { x: 4040, steps: 4 },
+        flag: 4280,
+    },
+
+    // ------------------------------------------------------------------
+    //  6. The last one, and it uses everything: lava under every gap,
+    //     spikes on the flat, and moving platforms over the worst of it.
+    // ------------------------------------------------------------------
+    {
+        name: 'Castle Inferno',
+        blurb: 'Do not fall',
+        theme: 'castle',
+        width: 4800,
+        time: 280,
+        ground: [[0, 600], [760, 520], [1440, 600], [2200, 480], [2840, 560], [3560, 1240]],
+        solids: [
+            ['low', 200, 160], ['low', 880, 160], ['low', 1520, 200], ['low', 2280, 160],
+            ['low', 2920, 200], ['low', 3640, 160],
+            ['mid', 400, 160], ['mid', 1160, 160], ['mid', 1800, 200], ['mid', 2560, 160],
+            ['mid', 3200, 200], ['mid', 4000, 160],
+        ],
+        oneWay: [[280, 160], [1040, 200], [1880, 160], [2640, 200], [3400, 160], [4120, 160]],
+        walls: [[1120, 2], [2480, 2], [3800, 3], [4200, 2]],
+        movers: [
+            { x: 640, y: 'low', width: 120, axis: 'x', range: 80, speed: 1.4 },
+            { x: 2040, y: 'mid', width: 120, axis: 'y', range: 100, speed: 1 },
+            { x: 3280, y: 'low', width: 160, axis: 'x', range: 120, speed: 1.6 },
+        ],
+        blocks: [
+            { x: 240, items: [['brick', null], ['question', 'mushroom'], ['brick', null]] },
+            { x: 1560, items: [['question', 'coin', 3], ['brick', null]] },
+            { x: 2320, items: [['question', 'star'], ['brick', null]] },
+            { x: 2960, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
+            { x: 3680, items: [['question', 'mushroom'], ['brick', null]] },
+            { x: 4240, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
+        ],
+        // 'lava' with no y fills the pit it is placed over.
+        hazards: [
+            ['lava', 600, 160], ['lava', 1280, 160], ['lava', 2040, 160],
+            ['lava', 2680, 160], ['lava', 3400, 160],
+            ['spikes', 1600, 80], ['spikes', 2960, 80], ['spikes', 4360, 120],
+        ],
+        springs: [[120, 'ground'], [1040, 'ground'], [2440, 'ground'], [4160, 'ground']],
+        enemies: [
+            ['normal', 300, 'ground'], ['jumping', 900, 'ground'], ['turtle', 1200, 'ground'],
+            ['normal', 1600, 'ground'], ['jumping', 1850, 'mid'], ['turtle', 2280, 'low'],
+            ['normal', 2560, 'ground'], ['jumping', 2900, 'ground'], ['turtle', 2920, 'low'],
+            ['normal', 3700, 'ground'], ['jumping', 3900, 'ground'], ['turtle', 4300, 'ground'],
+        ],
+        portals: [['jumping', 1440, 'ground'], ['turtle', 2840, 'ground'], ['normal', 4080, 'ground']],
+        stair: { x: 4480, steps: 5 },
+        flag: 4720,
+    },
 ];
 
-// [x, width] per tier. Nothing overlaps and every span is a multiple of GRID.
-const PLATFORM_LAYOUT = [
-    // Lower tier - one jump from the ground
-    ['low', 240, 200], ['low', 560, 160], ['low', 1040, 200], ['low', 1400, 160],
-    ['low', 1880, 200], ['low', 2240, 160], ['low', 2760, 200],
-    // Middle tier - staggered so it never sits directly on the tier below
-    ['mid', 400, 160], ['mid', 800, 160], ['mid', 1280, 160], ['mid', 1640, 160],
-    ['mid', 2120, 160], ['mid', 2480, 160], ['mid', 2960, 160],
-];
+/**
+ * Which design a level number lands on, and which lap of the campaign it is.
+ * Levels loop: finishing the castle sends you back to the hills, faster and
+ * with less time on the clock. Multiplayer always builds the first design, so
+ * every player in a session is standing in the same world.
+ */
+function levelPlan(level = gameState.level) {
+    if (multiplayerState.connected) {
+        // The round counter decides the world, so every client in the session
+        // is standing in the same one. Before the first snapshot lands there is
+        // nothing to go on, and the hills are as good a guess as any.
+        const spot = roundDesign(multiplayerState.round ? multiplayerState.round.index : 0);
+        return {
+            design: spot.design,
+            index: spot.index,
+            lap: spot.lap,
+            label: `${spot.lap}-${spot.index + 1}`,
+        };
+    }
+    const index = (level - 1) % LEVELS.length;
+    const lap = Math.floor((level - 1) / LEVELS.length) + 1;
+    return { design: LEVELS[index], index, lap, label: `${lap}-${index + 1}` };
+}
 
-// One-way cloud platforms you can jump up through
-const CLOUD_LAYOUT = [
-    [280, 160], [880, 160], [1520, 160], [2160, 160], [2720, 160],
-];
+// The name shown in the HUD and on the game over screen: 1-1, 1-2, ... 2-1.
+function worldLabel(level = gameState.level) {
+    return levelPlan(level).label;
+}
 
-// Rows of blocks at head height, in bands clear of the platforms above them
-const BLOCK_ROWS = [
-    // The first mushroom sits in a pocket: a power-up released here walks
-    // right into the pipe at x=460 and back into the world edge, so it can
-    // never reach the pit at 840. The block by that pit holds a coin instead,
-    // which stays put.
-    { x: 120, items: [['brick', null], ['question', 'mushroom'], ['brick', null]] },
-    { x: 760, items: [['question', 'coin']] },
-    // The star sat 80px from the pit at 1680; from here it has 640px of run.
-    { x: 960, items: [['question', 'star'], ['brick', null]] },
-    { x: 1280, items: [['brick', null], ['question', 'coin', 3], ['brick', null]] },
-    { x: 1560, items: [['brick', null], ['question', 'coin']] },
-    { x: 2400, items: [['brick', null], ['question', 'coin'], ['brick', null]] },
-    { x: 2680, items: [['question', 'mushroom'], ['brick', null]] },
-];
-
-// [type, x, tier the enemy starts on]
-const ENEMY_LAYOUT = [
-    ['normal', 480, 'ground'], ['normal', 620, 'low'], ['normal', 1120, 'low'],
-    ['normal', 1460, 'ground'], ['normal', 2000, 'low'], ['normal', 2300, 'low'],
-    ['normal', 2840, 'ground'],
-    ['jumping', 1240, 'ground'], ['jumping', 2520, 'mid'],
-    ['turtle', 700, 'ground'], ['turtle', 1920, 'low'], ['turtle', 3000, 'ground'],
-];
-
-// [type, x, tier the pipe stands on]
-const PORTAL_LAYOUT = [
-    ['normal', 460, 'ground'], ['jumping', 1920, 'low'], ['turtle', 2160, 'ground'],
-];
-
-const STAIRCASE_X = 3200;
-const STAIRCASE_STEPS = 4;
-const FLAGPOLE_X = 3440;
-
-function buildGround() {
-    for (const segment of GROUND_SEGMENTS) {
-        platforms.push(new Platform(segment.x, GROUND_Y, segment.width, GROUND_DEPTH, 'ground'));
+function buildGround(design) {
+    for (const [x, width] of design.ground) {
+        platforms.push(new Platform(x, GROUND_Y, width, GROUND_DEPTH, 'ground'));
     }
 }
 
@@ -4374,6 +5624,14 @@ function buildStaircase(startX, steps) {
         for (let j = 0; j <= i; j++) {
             blocks.push(new Block(startX + i * GRID, GROUND_Y - (j + 1) * GRID, 'solid'));
         }
+    }
+}
+
+// A column of solid blocks standing on the ground - something to climb, or to
+// bounce a kicked shell off.
+function buildWall(x, blocksTall) {
+    for (let i = 1; i <= blocksTall; i++) {
+        blocks.push(new Block(x, GROUND_Y - i * GRID, 'solid'));
     }
 }
 
@@ -4393,6 +5651,9 @@ function addCoin(x, y) {
 }
 
 function initLevel() {
+    const plan = levelPlan();
+    const design = plan.design;
+
     // Use multiplayer color if connected
     const playerColor = multiplayerState.connected ? multiplayerState.playerColor : PLAYER_COLORS[0];
     const keptContinue = player ? player.hasUsedContinue : false;
@@ -4408,83 +5669,160 @@ function initLevel() {
     powerUps = [];
     particles = [];
     floatingTexts = [];
+    hazards = [];
+    springs = [];
+    movers = [];
     flagpole = null;
     coinIndex = 0;
+
+    // Everything about the setting comes from the design: how wide the world
+    // is, how long you have, what it looks like, how well you can stand up in
+    // it, and what is playing while you do.
+    theme = THEMES[design.theme] || THEMES.overworld;
+    CONFIG.WORLD_WIDTH = design.width;
+    CONFIG.LEVEL_TIME = design.time;
+    CONFIG.surfaceGrip = design.grip === undefined ? 1 : design.grip;
+    gameState.levelName = design.name;
+    gameState.worldLabel = plan.label;
+    music.setTrack(theme.track);
 
     gameState.camera = { x: 0, y: 0 };
     gameState.screenShake = { intensity: 0, duration: 0, maxDuration: 0 };
     gameState.levelCleared = false;
-    gameState.time = CONFIG.LEVEL_TIME;
+    // Later laps of the campaign are tighter on time as well as quicker.
+    gameState.levelTime = Math.max(180, CONFIG.LEVEL_TIME - (plan.lap - 1) * 30);
+    gameState.time = gameState.levelTime;
     gameState.timeTicker = 0;
 
-    // Enemies get a little quicker each level.
-    CONFIG.enemySpeedScale = 1 + (gameState.level - 1) * 0.12;
+    // Enemies get a little quicker each level, and the climb carries across
+    // laps - but it is capped, so lap five is hard rather than impossible.
+    CONFIG.enemySpeedScale = Math.min(1.9, 1 + (gameState.level - 1) * 0.07);
 
-    buildGround();
+    // The parallax backdrop is sized to the world, so it has to be rebuilt
+    // whenever the world changes size.
+    initClouds();
 
-    for (const [tier, x, width] of PLATFORM_LAYOUT) {
-        platforms.push(new Platform(x, TIER[tier], width, PLATFORM_THICKNESS, 'brick'));
+    buildGround(design);
+
+    for (const [tier, x, width] of design.solids || []) {
+        platforms.push(new Platform(x, tierY(tier), width, PLATFORM_THICKNESS, 'brick'));
     }
-    for (const [x, width] of CLOUD_LAYOUT) {
-        platforms.push(new Platform(x, TIER.high, width, CLOUD_THICKNESS, 'cloud'));
+    for (const [x, width, tier] of design.oneWay || []) {
+        platforms.push(new Platform(x, tierY(tier || 'high'), width, CLOUD_THICKNESS, 'cloud'));
+    }
+    for (const spec of design.movers || []) {
+        const mover = new MovingPlatform(spec.x, tierY(spec.y), spec.width, spec);
+        platforms.push(mover);
+        movers.push(mover);
     }
 
-    for (const row of BLOCK_ROWS) {
+    for (const [x, blocksTall] of design.walls || []) {
+        buildWall(x, blocksTall);
+    }
+
+    for (const row of design.blocks || []) {
+        const rowY = row.y === undefined ? BLOCK_ROW_Y : tierY(row.y);
         row.items.forEach(([type, contents, count], i) => {
-            blocks.push(new Block(row.x + i * GRID, BLOCK_ROW_Y, type, contents, count || 1));
+            blocks.push(new Block(row.x + i * GRID, rowY, type, contents, count || 1));
         });
     }
 
-    // Staircase up to the goal, like the run-in at the end of a Mario level
-    buildStaircase(STAIRCASE_X, STAIRCASE_STEPS);
+    for (const [variant, x, width, y] of design.hazards || []) {
+        if (variant === 'lava') {
+            // Lava fills the chasm it is placed over, with a lip showing above
+            // the ground line so you can see what you are jumping across.
+            hazards.push(new Hazard(x, y === undefined ? GROUND_Y - 10 : y, width, 80, 'lava'));
+        } else {
+            hazards.push(new Hazard(x, y === undefined ? GROUND_Y - 20 : y, width, 20, 'spikes'));
+        }
+    }
 
-    for (const [type, x, tier] of PORTAL_LAYOUT) {
-        portals.push(new Portal(x, TIER[tier] - CONFIG.PORTAL_HEIGHT, type));
+    for (const [x, tier] of design.springs || []) {
+        springs.push(new Spring(x, tierY(tier || 'ground')));
+    }
+
+    // Staircase up to the goal, like the run-in at the end of a Mario level
+    if (design.stair) buildStaircase(design.stair.x, design.stair.steps);
+
+    for (const [type, x, tier] of design.portals || []) {
+        portals.push(new Portal(x, tierY(tier) - CONFIG.PORTAL_HEIGHT, type));
     }
 
     // In multiplayer the spawn master fills the level through the portals.
     if (!multiplayerState.connected) {
-        for (const [type, x, tier] of ENEMY_LAYOUT) {
-            enemies.push(createEnemy(type, x, TIER[tier] - CONFIG.ENEMY_SIZE));
-        }
-        // Later levels get reinforcements spread across the level.
-        const extra = Math.min(4, gameState.level - 1);
-        for (let i = 0; i < extra; i++) {
-            enemies.push(createEnemy(i % 2 ? 'turtle' : 'jumping', 640 + i * 640, TIER.low - CONFIG.ENEMY_SIZE));
+        const roster = design.enemies || [];
+        for (const [type, x, tier] of roster) {
+            enemies.push(createEnemy(type, x, tierY(tier) - CONFIG.ENEMY_SIZE));
         }
 
-        flagpole = new Flagpole(FLAGPOLE_X, GROUND_Y);
+        // From the second lap on, the level gets reinforcements. They double up
+        // on positions the design already vouches for, so nothing lands in a
+        // wall or over a pit.
+        const extra = Math.min(4, (plan.lap - 1) * 2);
+        for (let i = 0; i < extra && roster.length; i++) {
+            const [, x, tier] = roster[(i * 3) % roster.length];
+            enemies.push(createEnemy(i % 2 ? 'turtle' : 'jumping', x, tierY(tier) - CONFIG.ENEMY_SIZE));
+        }
+
+        flagpole = new Flagpole(design.flag, GROUND_Y);
     }
 
-    buildCoins();
+    buildCoins(design);
+
+    // Which round this level was built for, so a snapshot that only confirms
+    // the world we are already standing in does not rebuild it underneath us.
+    gameState.roundIndexBuilt = multiplayerState.round ? multiplayerState.round.index : null;
+
+    // Number the ledges for territory. The level is built from data in a fixed
+    // order and without a single Math.random, so this index is the same on
+    // every client - which is what lets a tile be identified across the network
+    // by nothing more than its position in this array.
+    indexTerritory();
 
     updateCamera(true);
     updateHUD();
 }
 
-function buildCoins() {
-    // An arc floating above every platform, low tier and mid tier alike
-    for (const [tier, x, width] of PLATFORM_LAYOUT) {
-        buildCoinArc(x + width / 2, TIER[tier] - 70, 5);
-    }
+function buildCoins(design) {
+    // Coins are placed off the level as built rather than off the data, so a
+    // new platform anywhere - moving ones included - is paid for automatically.
+    for (const platform of platforms) {
+        if (platform.variant === 'ground') continue;
 
-    // A line along every cloud platform
-    for (const [x, width] of CLOUD_LAYOUT) {
-        for (let i = 0; i < 4; i++) {
-            addCoin(x + 26 + i * 32, TIER.high - 46);
+        if (platform.oneWay) {
+            // A line along the top of every one-way ledge
+            const count = Math.max(1, Math.floor(platform.width / 32) - 1);
+            for (let i = 0; i < count; i++) {
+                addCoin(platform.x + 26 + i * 32, platform.y - 46);
+            }
+        } else {
+            // An arc floating above everything you can stand on. Moving
+            // platforms are paid over the middle of their run.
+            const home = platform.homeX === undefined ? platform.x : platform.homeX;
+            const homeY = platform.homeY === undefined ? platform.y : platform.homeY;
+            buildCoinArc(home + platform.width / 2, homeY - 70, 5);
         }
     }
 
-    // Rewards for clearing each pit
-    for (let i = 0; i < GROUND_SEGMENTS.length - 1; i++) {
-        const gapStart = GROUND_SEGMENTS[i].x + GROUND_SEGMENTS[i].width;
-        const gapEnd = GROUND_SEGMENTS[i + 1].x;
+    // Rewards for clearing each pit - but only the ones you cross in one jump.
+    // A chasm bridged by platforms already pays out through them.
+    const ground = design.ground;
+    for (let i = 0; i < ground.length - 1; i++) {
+        const gapStart = ground[i][0] + ground[i][1];
+        const gapEnd = ground[i + 1][0];
+        if (gapEnd - gapStart > 300) continue;
         buildCoinArc((gapStart + gapEnd) / 2, GROUND_Y - 120, 3, 40);
     }
 
     // A row over each block row, so bumping them is on the way to something
-    for (const row of BLOCK_ROWS) {
-        addCoin(row.x + (row.items.length * GRID) / 2 - CONFIG.COIN_SIZE / 2, BLOCK_ROW_Y - 60);
+    for (const row of design.blocks || []) {
+        const rowY = row.y === undefined ? BLOCK_ROW_Y : tierY(row.y);
+        addCoin(row.x + (row.items.length * GRID) / 2 - CONFIG.COIN_SIZE / 2, rowY - 60);
+    }
+
+    // Anything the design asks for by hand
+    for (const trail of design.coins || []) {
+        buildCoinArc(trail.x, trail.y, trail.count, trail.spacing || 34);
     }
 }
 
@@ -4497,18 +5835,67 @@ function cacheHudElements() {
     ['score', 'coins', 'lives', 'level', 'time', 'combo'].forEach(id => {
         hud[id] = document.getElementById(id);
     });
+    // The clock's caption changes with the mode - "Time" on a level timer,
+    // "Round" or "Next" on the shared multiplayer clock.
+    hud.timeLabel = document.getElementById('time-label');
+    hud.mode = document.getElementById('round-mode');
 }
 cacheHudElements();
+
+/**
+ * The clock in the HUD, and whether it should be shouting. Single player counts
+ * the level timer down in bare seconds. Multiplayer shows the shared round
+ * clock, and once the round is settled it counts down to the next world
+ * instead, so the wait is never dead air.
+ *
+ * Returns true when the reading is urgent enough to highlight.
+ */
+function updateClockDisplay() {
+    const setLabel = (text) => { if (hud.timeLabel) hud.timeLabel.textContent = text; };
+
+    if (!multiplayerState.connected) {
+        hud.time.textContent = Math.max(0, Math.ceil(gameState.time));
+        setLabel('Time');
+        return gameState.time <= 60;
+    }
+
+    const view = roundView();
+    if (!view) {
+        // Connected, but the first round snapshot has not arrived yet.
+        hud.time.textContent = '--';
+        setLabel('Round');
+        return false;
+    }
+
+    if (view.phase === ROUND_PHASE.ACTIVE) {
+        hud.time.textContent = formatClock(view.remainingMs);
+        setLabel('Round');
+        return view.remainingMs <= ROUND.URGENT_MS;
+    }
+
+    hud.time.textContent = view.phase === ROUND_PHASE.INTERMISSION
+        ? formatClock(view.remainingMs)
+        : '0:00';
+    setLabel('Next');
+    return false;
+}
 
 function updateHUD() {
     if (hud.score) hud.score.textContent = gameState.score;
     if (hud.coins) hud.coins.textContent = gameState.coins;
     if (hud.lives) hud.lives.textContent = Math.max(0, gameState.lives);
-    if (hud.level) hud.level.textContent = gameState.level;
+    if (hud.level) hud.level.textContent = gameState.worldLabel || worldLabel();
     if (hud.time) {
-        hud.time.textContent = multiplayerState.connected ? '--' : Math.max(0, Math.ceil(gameState.time));
-        hud.time.parentElement.classList.toggle('urgent', !multiplayerState.connected && gameState.time <= 60);
+        hud.time.parentElement.classList.toggle('urgent', updateClockDisplay());
     }
+    if (hud.mode) {
+        // Only shown when it is not the default game, so the HUD does not carry
+        // a chip saying "Score attack" through every ordinary round.
+        const territory = isTerritoryRound();
+        hud.mode.parentElement.classList.toggle('hidden', !territory);
+        if (territory) hud.mode.textContent = `Territory ${Math.round(myTerritoryShare() * 100)}%`;
+    }
+
     if (hud.combo) {
         const active = player && player.combo > 1;
         hud.combo.parentElement.classList.toggle('hidden', !active);
@@ -4556,7 +5943,7 @@ function levelComplete(grabHeight = 0.5) {
     music.stop();
 
     createFloatingText(player.x + player.width / 2, player.y - 30, `+${heightBonus}`, '#FFD700', 26);
-    showBanner(`Level ${gameState.level} Clear!`, `Time bonus +${timeBonus}`, 2600);
+    showBanner(`${gameState.worldLabel} ${gameState.levelName} - Clear!`, `Time bonus +${timeBonus}`, 2600);
 
     for (let i = 0; i < 40; i++) {
         setTimeout(() => {
@@ -4571,10 +5958,18 @@ function levelComplete(grabHeight = 0.5) {
 
     setTimeout(() => {
         if (!gameState.running) return;
+        const wasLap = levelPlan().lap;
         gameState.level++;
         gameState.lives++; // A life for finishing the level
         initLevel();
-        showBanner(`Level ${gameState.level}`, 'Go!', 1600);
+
+        const plan = levelPlan();
+        if (plan.lap > wasLap) {
+            // Round the campaign and back to the start, but not as it was.
+            showBanner(`Lap ${plan.lap}!`, 'Same worlds, meaner', 2400);
+        } else {
+            showBanner(`${plan.label}  ${plan.design.name}`, plan.design.blurb, 1900);
+        }
         music.start();
     }, 2800);
 }
@@ -4584,34 +5979,514 @@ function timeUp() {
     showBanner('Time Up!', '', 1800);
     player.health = 1;
     player.startDeath();
-    gameState.time = CONFIG.LEVEL_TIME;
+    gameState.time = gameState.levelTime;
+}
+
+// ============================================================================
+//  MULTIPLAYER ROUND FLOW
+// ============================================================================
+
+/**
+ * Which world a round counter lands on, and which lap of the six it is. The
+ * counter only ever goes up, so round 7 is the hills again on lap 2.
+ */
+function roundDesign(counter) {
+    const safe = Math.max(0, Math.floor(counter || 0));
+    const index = safe % LEVELS.length;
+    return { design: LEVELS[index], index, lap: Math.floor(safe / LEVELS.length) + 1 };
+}
+
+/**
+ * Where the shared clock has got to. Every client works this out from the one
+ * timestamp in the round node, so nobody has to broadcast "the round ended" -
+ * and a client that joins halfway through gets the right world with the right
+ * time left on it without any catch-up traffic at all.
+ *
+ * Returns null until the first snapshot arrives.
+ */
+function roundView(now) {
+    const round = multiplayerState.round;
+    if (!round) return null;
+
+    const at = now === undefined ? multiplayer.serverNow() : now;
+    const elapsed = at - round.startedAt;
+
+    if (elapsed < round.duration) {
+        return {
+            phase: ROUND_PHASE.ACTIVE,
+            index: round.index,
+            // A startedAt in the future - a clock that has drifted since the
+            // offset was last read - would otherwise show more time left than
+            // the round has.
+            remainingMs: Math.min(round.duration, round.duration - elapsed),
+        };
+    }
+
+    const intoBreak = elapsed - round.duration;
+    if (intoBreak < ROUND.INTERMISSION_MS) {
+        return {
+            phase: ROUND_PHASE.INTERMISSION,
+            index: round.index,
+            remainingMs: ROUND.INTERMISSION_MS - intoBreak,
+        };
+    }
+
+    return { phase: ROUND_PHASE.EXPIRED, index: round.index, remainingMs: 0 };
+}
+
+// ---------------------------------------------------------------------------
+//  TERRITORY
+// ---------------------------------------------------------------------------
+
+/**
+ * Numbers every ledge in the level. The tile id is simply the platform's
+ * position in the array, which works as a network identity only because levels
+ * are built from data in a fixed order with no randomness anywhere in the
+ * layout - so every client numbers them identically without agreeing on
+ * anything first.
+ *
+ * The ground is never capturable. See the note on TERRITORY.
+ */
+function indexTerritory() {
+    let count = 0;
+    for (let i = 0; i < platforms.length; i++) {
+        const platform = platforms[i];
+        platform.tileId = i;
+        platform.capturable = platform.variant !== 'ground';
+        if (platform.capturable) count++;
+    }
+    territoryState.tileCount = count;
+    territoryState.dirty = true;
+}
+
+function tileKey(tileId) {
+    return `tile_${tileId}`;
+}
+
+function tileIdFromKey(key) {
+    const id = Number.parseInt(String(key).replace('tile_', ''), 10);
+    return Number.isInteger(id) ? id : null;
+}
+
+// The palette to paint a tile in. Remembered per uid rather than looked up from
+// the live player list, so a player who quits mid-round leaves their colour on
+// the board rather than having their ledges turn grey.
+function territoryPalette(uid) {
+    if (!uid) return null;
+    if (uid === multiplayerState.playerId) return multiplayerState.playerColor || PLAYER_COLORS[0];
+
+    const remembered = territoryState.colors.get(uid);
+    if (remembered) return remembered;
+
+    const live = multiplayerState.remotePlayers.get(uid);
+    return (live && live.color) || null;
+}
+
+function territoryOwnerOf(platform) {
+    if (!platform || !platform.capturable) return null;
+    return territoryState.owners.get(platform.tileId) || null;
+}
+
+/**
+ * How the map is split up, best share first. Recomputed only when ownership
+ * actually changes - this is read every frame by the HUD, and counting tiles
+ * sixty times a second to produce the same answer is waste.
+ */
+function territoryShares() {
+    if (!territoryState.dirty) return territoryState.shares;
+    territoryState.dirty = false;
+
+    const counts = new Map();
+    territoryState.owners.forEach((uid, tileId) => {
+        // Ownership can outlive a rebuild by a few frames, so ignore anything
+        // that is not a tile in the level currently standing.
+        const platform = platforms[tileId];
+        if (!platform || !platform.capturable) return;
+        counts.set(uid, (counts.get(uid) || 0) + 1);
+    });
+
+    const total = territoryState.tileCount || 1;
+    const shares = [];
+    counts.forEach((tiles, uid) => {
+        const isSelf = uid === multiplayerState.playerId;
+        const live = multiplayerState.remotePlayers.get(uid);
+        shares.push({
+            id: uid,
+            name: isSelf
+                ? (multiplayerState.playerName || 'You')
+                : (live ? live.name : 'Left'),
+            isSelf,
+            tiles,
+            share: tiles / total,
+            palette: territoryPalette(uid),
+        });
+    });
+
+    shares.sort((a, b) => b.tiles - a.tiles || String(a.name).localeCompare(String(b.name)));
+    territoryState.shares = shares;
+    return shares;
+}
+
+function myTerritoryShare() {
+    const mine = territoryShares().find(entry => entry.isSelf);
+    return mine ? mine.share : 0;
+}
+
+function myTerritoryTiles() {
+    const mine = territoryShares().find(entry => entry.isSelf);
+    return mine ? mine.tiles : 0;
+}
+
+function setTileOwner(tileId, uid) {
+    if (tileId === null) return;
+
+    const before = territoryState.owners.get(tileId) || null;
+    if (before === (uid || null)) return;
+
+    if (uid) territoryState.owners.set(tileId, uid);
+    else territoryState.owners.delete(tileId);
+    territoryState.dirty = true;
+
+    // The map changing is the only thing that moves a territory board, and
+    // player position updates - which drive the score board - say nothing about
+    // it. The board's own signature check stops this rebuilding the DOM when
+    // the standings have not actually moved.
+    if (multiplayerState.connected) multiplayer.updateLeaderboard();
+}
+
+/**
+ * Take the ledge under your feet. Called every frame the player is standing on
+ * something, not just on the landing frame, so walking from one ledge to the
+ * next takes the second one too - "last touched" means touched, not landed on.
+ * It short-circuits on tiles we already hold, which is what keeps standing
+ * still from being a write every frame.
+ */
+function claimGround(surface) {
+    if (!surface || !surface.capturable) return;
+    if (!multiplayerState.connected || !isTerritoryRound()) return;
+    if (roundIsSettled()) return;
+    if (!player || player.outOfLives || player.dying) return;
+
+    const held = territoryState.owners.get(surface.tileId);
+    if (held === multiplayerState.playerId) return;
+
+    // Taking a ledge off somebody is worth more than colouring in a loose one.
+    if (held) {
+        gameState.score += TERRITORY.STEAL_POINTS;
+        createFloatingText(
+            surface.x + surface.width / 2,
+            surface.y - 18,
+            `+${TERRITORY.STEAL_POINTS}`,
+            '#FFFFFF',
+            16
+        );
+    }
+
+    // Applied locally first: the paint should land under your feet on the frame
+    // you touch it, not a round trip later.
+    setTileOwner(surface.tileId, multiplayerState.playerId);
+    createSparkle(surface.x + surface.width / 2, surface.y - 6, '#FFFFFF');
+    multiplayer.claimTile(surface.tileId);
+}
+
+/**
+ * Holding pays. Without this the whole game is one fast lap at the death -
+ * last touch wins, so whoever laps last takes everything and the previous two
+ * minutes were decoration. Paying per second held makes defending a corner of
+ * the map worth as much as sprinting round it, which is also what gives
+ * stomping somebody off their ledge a point.
+ */
+function payTerritoryHolders(now) {
+    if (now - territoryState.lastPaidAt < 1000) return;
+    territoryState.lastPaidAt = now;
+
+    const tiles = myTerritoryTiles();
+    if (!tiles) return;
+
+    gameState.score += tiles * TERRITORY.HOLD_POINTS_PER_TILE;
+}
+
+/**
+ * Which game a round counter plays. Derived rather than stored: same counter,
+ * same answer on every client, with no field to validate or keep in step.
+ *
+ * The lap is folded in because there is an even number of worlds. A plain
+ * `counter % 2` would pin each world to one game forever - Green Hills score
+ * attack, Cobalt Coast territory, for all eternity - so the shift makes every
+ * world alternate between the two as the campaign comes round again.
+ */
+function roundMode(counter) {
+    const safe = Math.max(0, Math.floor(counter || 0));
+    const lapShift = Math.floor(safe / LEVELS.length);
+    return (safe + lapShift) % 2 === 0 ? ROUND_MODES.SCORE : ROUND_MODES.TERRITORY;
+}
+
+// The game being played right now. Single player is never a territory round.
+function currentRoundMode() {
+    if (!multiplayerState.connected || !multiplayerState.round) return ROUND_MODES.SCORE;
+    return roundMode(multiplayerState.round.index);
+}
+
+function isTerritoryRound() {
+    return currentRoundMode() === ROUND_MODES.TERRITORY;
+}
+
+// True once the whistle has blown and the world is waiting on the next one.
+function roundIsSettled() {
+    const view = roundView();
+    return !!view && view.phase !== ROUND_PHASE.ACTIVE;
+}
+
+// m:ss. The single-player clock counts bare seconds, but a round is minutes
+// long and "150" does not read as two and a half minutes at a glance.
+function formatClock(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Everyone in the session, ourselves included, best score first. Ties break on
+ * name so the board reads the same on every screen rather than falling out of
+ * whatever order the players arrived in.
+ */
+function roundStandings() {
+    const board = [{
+        id: multiplayerState.playerId,
+        name: multiplayerState.playerName || 'You',
+        score: gameState.score,
+        isSelf: true,
+    }];
+
+    multiplayerState.remotePlayers.forEach((data, id) => {
+        board.push({
+            id,
+            name: data.name || 'Player',
+            score: data.score || 0,
+            isSelf: false,
+        });
+    });
+
+    board.sort((a, b) => b.score - a.score || String(a.name).localeCompare(String(b.name)));
+    return board;
+}
+
+/**
+ * The whistle. Freezes the standings, says who took the world, and holds
+ * everyone safe while the board is up - a turtle wandering into you during the
+ * intermission would be a death you were given no way to avoid.
+ */
+function settleRound() {
+    const territory = isTerritoryRound();
+    const standings = territory ? territoryShares() : roundStandings();
+    multiplayerState.roundResult = standings;
+
+    const winner = standings[0];
+
+    // A territory round is won on the map, not on the scoreboard - but the
+    // scoreboard is the one currency the session and the all-time table share,
+    // so the final share is paid out into it.
+    if (territory) {
+        const mine = standings.find(entry => entry.isSelf);
+        if (mine) {
+            const bonus = Math.round(mine.share * TERRITORY.WIN_BONUS);
+            if (bonus > 0) {
+                gameState.score += bonus;
+                createFloatingText(
+                    player.x + player.width / 2, player.y - 30,
+                    `+${bonus}`, '#FFD700', 24
+                );
+            }
+        }
+    }
+
+    // A visible separator, not spaces: the banner is HTML, so runs of
+    // whitespace collapse and the places run into one another.
+    const podium = standings.slice(0, 3)
+        .map((entry, i) => territory
+            ? `${i + 1}. ${entry.name} ${Math.round(entry.share * 100)}%`
+            : `${i + 1}. ${entry.name} ${entry.score}`)
+        .join('  ·  ');
+
+    if (winner && winner.isSelf && standings.length > 1) {
+        sounds.levelComplete();
+        haptics.success();
+    }
+
+    const plan = levelPlan();
+    showBanner(
+        `${plan.design.name} - ${winner ? winner.name : 'nobody'} takes it`,
+        podium,
+        ROUND.INTERMISSION_MS
+    );
+
+    // tick() freezes the world for the duration, so there is nothing to
+    // protect the player from here - only a stride to tidy up, so the freeze
+    // frame is not caught mid-run.
+    if (player) player.velocityX = 0;
+}
+
+/**
+ * A new world has been opened by the spawn master. Everyone rebuilds against
+ * it - the round node is the only thing that decides which level is standing.
+ */
+function onRoundStarted(previous) {
+    multiplayerState.roundPhaseSeen = ROUND_PHASE.ACTIVE;
+    multiplayerState.roundResult = null;
+
+    // Territory belongs to the world it was painted on. The spawn master clears
+    // the shared copy; this is the local one, cleared straight away so the new
+    // world does not open wearing the last one's colours for a second.
+    territoryState.owners.clear();
+    territoryState.shares = [];
+    territoryState.dirty = true;
+    territoryState.lastPaidAt = multiplayer.serverNow();
+
+    if (!gameState.running || !multiplayerState.connected) return;
+
+    // A round boundary is an amnesty: anyone who ran out of lives is back in
+    // for the new world rather than watching it from the out-of-lives screen.
+    if (player && player.outOfLives) {
+        clearCountdowns();
+        setScreenVisible('out-of-lives-screen', false);
+        gameState.lives = Math.max(gameState.lives, 3);
+    }
+
+    // startGame() builds a level before the first snapshot can arrive, so the
+    // first round usually finds the right world already standing.
+    if (gameState.roundIndexBuilt !== multiplayerState.round.index) {
+        initLevel();
+    }
+
+    // initLevel() builds a fresh player, so the grace period has to be granted
+    // here rather than at the whistle - the object it was set on is gone.
+    if (player) player.setInvulnerable(true, 2500);
+
+    // The two boards share a panel, and a round can swap which one is showing.
+    // Position updates would get round to it, but only once somebody moves.
+    multiplayerState.lastLeaderboardSignature = '';
+    multiplayer.updateLeaderboard();
+
+    const plan = levelPlan();
+    const label = previous
+        ? `Round ${multiplayerState.round.index + 1}  ${plan.design.name}`
+        : plan.design.name;
+    // Not the level's own blurb: those tell a solo player to reach the flag,
+    // and there is no flag here. The round is the objective, so it says which
+    // round this is.
+    const clock = formatClock(multiplayerState.round.duration);
+    showBanner(label, isTerritoryRound()
+        ? `Territory - ${clock} - paint the ledges`
+        : `Score attack - ${clock} - highest score takes it`, 2200);
+    music.start();
+}
+
+/**
+ * Drives the round clock forward once per tick. The phase is derived, not
+ * stored, so this only has to notice when it changes and act once.
+ */
+function updateRound() {
+    const view = roundView();
+    if (!view) return;
+
+    if (view.phase !== multiplayerState.roundPhaseSeen) {
+        if (view.phase === ROUND_PHASE.INTERMISSION) settleRound();
+        multiplayerState.roundPhaseSeen = view.phase;
+    }
+
+    if (view.phase === ROUND_PHASE.ACTIVE && isTerritoryRound()) {
+        payTerritoryHolders(multiplayer.serverNow());
+    }
+
+    if (view.phase !== ROUND_PHASE.EXPIRED || !multiplayerState.isSpawnMaster) return;
+
+    // Only the master opens the next world, and a failed write should not be
+    // retried sixty times a second while the network is down.
+    const now = Date.now();
+    if (now - (multiplayerState.lastAdvanceAttempt || 0) < 1000) return;
+    multiplayerState.lastAdvanceAttempt = now;
+    multiplayer.advanceRound(view.index);
 }
 
 // ============================================================================
 //  SIMULATION TICK
 // ============================================================================
 
+/**
+ * Moves whatever is standing on a moving platform along with it. A rider that
+ * would be shoved into a wall is left behind instead - being carried into
+ * solid rock and stuck there is worse than sliding off the end.
+ */
+function carryRiders() {
+    const riders = [player, ...enemies];
+
+    for (const rider of riders) {
+        const ride = rider && rider.ridingPlatform;
+        if (!ride || (!ride.dx && !ride.dy)) continue;
+        if (rider.dying || rider.outOfLives) continue;
+
+        const moved = {
+            x: rider.x + ride.dx,
+            y: rider.y + ride.dy,
+            width: rider.width,
+            height: rider.height,
+        };
+        const blocked = solidCache.some(solid =>
+            solid !== ride && !solid.oneWay && overlaps(moved, solid));
+        if (blocked) {
+            rider.ridingPlatform = null;
+            continue;
+        }
+
+        rider.x = moved.x;
+        rider.y = moved.y;
+    }
+}
+
 function tick() {
     rebuildSolids();
 
+    // The round clock is read before anything moves, so the whistle takes
+    // effect on the same frame it blows rather than a frame late.
+    if (multiplayerState.connected) updateRound();
+
+    // Between rounds the whole world holds still while the standings are up.
+    // Locking the controls alone is not enough: a player left airborne over a
+    // pit when the whistle blew would fall into it, and a pit kills whatever
+    // your health and invulnerability say.
+    const roundBreak = multiplayerState.connected && roundIsSettled();
+
+    // Moving platforms go first, and take their passengers with them, so the
+    // player's own step below starts from a position that is already correct.
+    if (!roundBreak) {
+        movers.forEach(mover => mover.update());
+        if (movers.length) carryRiders();
+    }
+
     blocks.forEach(block => block.update());
-    if (!(player.dying && !multiplayerState.connected)) {
+    if (!(player.dying && !multiplayerState.connected) && !roundBreak) {
         portals.forEach(portal => portal.update());
     }
 
     // The player moves first so every collision below reads a current position.
-    player.update();
+    if (!roundBreak) player.update();
 
     // While the player is dying the level holds its breath, the way it does
     // in the games this is modelled on. Multiplayer keeps running because the
-    // world there belongs to everyone, not just to whoever just died.
-    const frozen = player.dying && !multiplayerState.connected;
+    // world there belongs to everyone, not just to whoever just died - except
+    // between rounds, when it belongs to nobody.
+    const frozen = (player.dying && !multiplayerState.connected) || roundBreak;
 
     if (!frozen) {
         enemies.forEach(enemy => enemy.update());
         powerUps.forEach(item => item.update());
         coins.forEach(coin => coin.update());
+        springs.forEach(spring => spring.update());
+        hazards.forEach(hazard => hazard.update());
         if (flagpole) flagpole.update();
+    } else {
+        // Lava keeps rolling while the world holds its breath - a still pool
+        // during a death animation looks like the game has frozen.
+        hazards.forEach(hazard => { hazard.animation += 0.05; });
     }
 
     powerUps = powerUps.filter(item => !item.collected);
@@ -4662,6 +6537,7 @@ function render() {
     platforms.forEach(platform => platform.draw());
     portals.forEach(portal => portal.draw());
     blocks.forEach(block => block.draw());
+    springs.forEach(spring => spring.draw());
     if (flagpole) flagpole.draw();
 
     coins.forEach(coin => coin.draw());
@@ -4678,6 +6554,10 @@ function render() {
     } else {
         player.draw();
     }
+
+    // Lava and spikes sit in front of everything that can fall into them, so
+    // the glow reads over the top of a body dropping through it.
+    hazards.forEach(hazard => hazard.draw());
 
     drawParticles();
     drawFloatingTexts();
@@ -4767,27 +6647,24 @@ function initClouds() {
 function drawBackground() {
     // Sky
     const sky = ctx.createLinearGradient(0, 0, 0, view.h);
-    sky.addColorStop(0, '#3E7CC4');
-    sky.addColorStop(0.45, '#79B7EC');
-    sky.addColorStop(1, '#CDEBFF');
+    sky.addColorStop(0, theme.sky[0]);
+    sky.addColorStop(0.45, theme.sky[1]);
+    sky.addColorStop(1, theme.sky[2]);
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, view.w, view.h);
 
-    // Sun, fixed high in the sky with only a hint of parallax
-    const sunX = view.w * 0.78 - gameState.camera.x * 0.03;
-    const sunY = view.h * 0.16 - gameState.camera.y * 0.05;
-    const sunGlow = ctx.createRadialGradient(sunX, sunY, 6, sunX, sunY, 90);
-    sunGlow.addColorStop(0, 'rgba(255, 249, 196, 0.95)');
-    sunGlow.addColorStop(0.25, 'rgba(255, 236, 139, 0.45)');
-    sunGlow.addColorStop(1, 'rgba(255, 236, 139, 0)');
-    ctx.fillStyle = sunGlow;
-    ctx.beginPath();
-    ctx.arc(sunX, sunY, 90, 0, Math.PI * 2);
-    ctx.fill();
+    drawSkyLight();
 
-    drawMountains();
-    drawClouds();
-    drawBushes();
+    switch (theme.backdrop) {
+        case 'hills': drawMountains(); break;
+        case 'peaks': drawMountains(true); break;
+        case 'cave': drawCaveWalls(); break;
+        case 'pillars': drawCastlePillars(); break;
+        default: break;
+    }
+
+    if (theme.clouds) drawClouds();
+    drawScenery();
 
     // Everything below the ground line is dark earth. Ground segments paint
     // over it, so the gaps between them read as real chasms rather than a
@@ -4795,14 +6672,58 @@ function drawBackground() {
     const undergroundY = GROUND_Y - gameState.camera.y;
     if (undergroundY < view.h) {
         const depths = ctx.createLinearGradient(0, undergroundY, 0, view.h);
-        depths.addColorStop(0, '#4A2A12');
-        depths.addColorStop(1, '#1B0F06');
+        depths.addColorStop(0, theme.deep[0]);
+        depths.addColorStop(1, theme.deep[1]);
         ctx.fillStyle = depths;
         ctx.fillRect(0, undergroundY, view.w, view.h - undergroundY);
     }
 }
 
-function drawMountains() {
+// Whatever is lighting this world: a sun, a winter moon, or the glow of
+// something molten off-screen.
+function drawSkyLight() {
+    const light = theme.light;
+    if (!light || light.kind === 'none') return;
+
+    if (light.kind === 'ember') {
+        // No disc - just heat rising from below the horizon.
+        const glowY = view.h * 0.9;
+        const heat = ctx.createRadialGradient(view.w / 2, glowY, 20, view.w / 2, glowY, view.w * 0.8);
+        heat.addColorStop(0, light.core);
+        heat.addColorStop(0.5, light.halo);
+        heat.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = heat;
+        ctx.fillRect(0, 0, view.w, view.h);
+        return;
+    }
+
+    const x = view.w * 0.78 - gameState.camera.x * 0.03;
+    const y = view.h * 0.16 - gameState.camera.y * 0.05;
+    const glow = ctx.createRadialGradient(x, y, 6, x, y, 90);
+    glow.addColorStop(0, light.core);
+    glow.addColorStop(0.25, light.halo);
+    glow.addColorStop(1, 'rgba(255, 236, 139, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y, 90, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (light.kind === 'moon') {
+        // A crescent: the disc with a bite taken out by the sky behind it.
+        ctx.save();
+        ctx.fillStyle = 'rgba(240, 248, 255, 0.95)';
+        ctx.beginPath();
+        ctx.arc(x, y, 26, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.beginPath();
+        ctx.arc(x + 12, y - 8, 22, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+function drawMountains(snowy = false) {
     const horizon = GROUND_Y - gameState.camera.y * 0.55;
 
     for (const hill of hillPositions) {
@@ -4815,15 +6736,23 @@ function drawMountains() {
         const baseY = horizon + (hill.far ? -10 : 6);
 
         ctx.save();
-        ctx.fillStyle = hill.far ? 'rgba(88, 132, 176, 0.55)' : 'rgba(74, 154, 96, 0.75)';
+        ctx.fillStyle = hill.far ? theme.far : theme.near;
         ctx.beginPath();
-        ctx.moveTo(x - w / 2, baseY);
-        ctx.quadraticCurveTo(x - w / 4, baseY - h, x, baseY - h);
-        ctx.quadraticCurveTo(x + w / 4, baseY - h, x + w / 2, baseY);
+        if (snowy) {
+            // Sharp alpine ridges rather than rolling hills
+            ctx.moveTo(x - w / 2, baseY);
+            ctx.lineTo(x - w * 0.14, baseY - h);
+            ctx.lineTo(x + w * 0.06, baseY - h * 0.72);
+            ctx.lineTo(x + w / 2, baseY);
+        } else {
+            ctx.moveTo(x - w / 2, baseY);
+            ctx.quadraticCurveTo(x - w / 4, baseY - h, x, baseY - h);
+            ctx.quadraticCurveTo(x + w / 4, baseY - h, x + w / 2, baseY);
+        }
         ctx.closePath();
         ctx.fill();
 
-        if (hill.far) {
+        if (hill.far || snowy) {
             // Snow cap
             ctx.fillStyle = 'rgba(255,255,255,0.65)';
             ctx.beginPath();
@@ -4836,9 +6765,69 @@ function drawMountains() {
     }
 }
 
+// Underground: teeth of rock closing in from the top and bottom of the frame.
+function drawCaveWalls() {
+    const baseY = GROUND_Y - gameState.camera.y * 0.55;
+
+    ctx.save();
+    for (const hill of hillPositions) {
+        const factor = hill.far ? 0.2 : 0.4;
+        const x = hill.x - gameState.camera.x * factor;
+        if (x < -400 || x > view.w + 400) continue;
+
+        const w = 200 * hill.scale;
+        const h = (hill.far ? 260 : 170) * hill.scale;
+        ctx.fillStyle = hill.far ? theme.far : theme.near;
+
+        // Stalagmite from the floor
+        ctx.beginPath();
+        ctx.moveTo(x - w / 2, baseY);
+        ctx.lineTo(x, baseY - h);
+        ctx.lineTo(x + w / 2, baseY);
+        ctx.closePath();
+        ctx.fill();
+
+        // ...and its opposite hanging from the roof
+        const topY = -gameState.camera.y * factor;
+        ctx.beginPath();
+        ctx.moveTo(x - w * 0.35, topY);
+        ctx.lineTo(x + w * 0.1, topY + h * 0.75);
+        ctx.lineTo(x + w * 0.45, topY);
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// The castle: buttresses marching past behind the action.
+function drawCastlePillars() {
+    const baseY = GROUND_Y - gameState.camera.y * 0.55;
+
+    ctx.save();
+    for (const hill of hillPositions) {
+        const factor = hill.far ? 0.2 : 0.38;
+        const x = hill.x - gameState.camera.x * factor;
+        if (x < -300 || x > view.w + 300) continue;
+
+        const w = 110 * hill.scale;
+        const h = (hill.far ? 300 : 220) * hill.scale;
+        ctx.fillStyle = hill.far ? theme.far : theme.near;
+        ctx.fillRect(x - w / 2, baseY - h, w, h);
+
+        // Battlements along the top
+        for (let i = 0; i < 3; i++) {
+            ctx.fillRect(x - w / 2 + i * (w / 3), baseY - h - 12, w / 5, 12);
+        }
+        // Arrow slit
+        ctx.fillStyle = 'rgba(255, 150, 60, 0.35)';
+        ctx.fillRect(x - 4, baseY - h * 0.6, 8, 30);
+    }
+    ctx.restore();
+}
+
 function drawClouds() {
     ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+    ctx.fillStyle = theme.clouds;
 
     for (const cloud of cloudPositions) {
         const x = cloud.x - gameState.camera.x * 0.45;
@@ -4864,21 +6853,56 @@ function drawClouds() {
     ctx.restore();
 }
 
-function drawBushes() {
+// The line of things sitting on the horizon, whatever this world grows.
+function drawScenery() {
+    if (theme.scenery === 'none') return;
+
     const baseY = GROUND_Y - gameState.camera.y + 2;
     ctx.save();
-    ctx.fillStyle = 'rgba(46, 125, 62, 0.85)';
+    ctx.fillStyle = theme.sceneryColor;
 
     for (const bush of bushPositions) {
         const x = bush.x - gameState.camera.x * 0.75;
         if (x < -140 || x > view.w + 140) continue;
-
         const s = bush.scale;
-        ctx.beginPath();
-        ctx.arc(x, baseY, 22 * s, Math.PI, 0);
-        ctx.arc(x + 26 * s, baseY, 28 * s, Math.PI, 0);
-        ctx.arc(x + 54 * s, baseY, 20 * s, Math.PI, 0);
-        ctx.fill();
+
+        switch (theme.scenery) {
+            case 'palms':
+                // Trunk with a spray of fronds
+                ctx.fillRect(x, baseY - 60 * s, 6 * s, 60 * s);
+                for (let i = -2; i <= 2; i++) {
+                    ctx.beginPath();
+                    ctx.ellipse(x + 3 * s + i * 16 * s, baseY - 62 * s, 18 * s, 6 * s,
+                        i * 0.35, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                break;
+            case 'crystals':
+                // Glowing shards pushing up out of the rock
+                for (let i = 0; i < 3; i++) {
+                    const cx = x + i * 20 * s;
+                    const h = (26 + i * 12) * s;
+                    ctx.beginPath();
+                    ctx.moveTo(cx - 7 * s, baseY);
+                    ctx.lineTo(cx, baseY - h);
+                    ctx.lineTo(cx + 7 * s, baseY);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                break;
+            case 'drifts':
+                // Banked snow
+                ctx.beginPath();
+                ctx.ellipse(x + 24 * s, baseY, 46 * s, 16 * s, 0, Math.PI, 0);
+                ctx.fill();
+                break;
+            default:
+                ctx.beginPath();
+                ctx.arc(x, baseY, 22 * s, Math.PI, 0);
+                ctx.arc(x + 26 * s, baseY, 28 * s, Math.PI, 0);
+                ctx.arc(x + 54 * s, baseY, 20 * s, Math.PI, 0);
+                ctx.fill();
+        }
     }
 
     ctx.restore();
@@ -5163,10 +7187,11 @@ async function startGame(mode) {
         player.hasUsedContinue = false;
 
         updateHUD();
+        const plan = levelPlan();
         const subtitle = multiplayerState.connected ? 'Multiplayer'
             : joinFailed ? 'Multiplayer unavailable - playing solo'
-            : 'Reach the flag!';
-        showBanner('Level 1', subtitle, joinFailed ? 2600 : 1800);
+            : plan.design.blurb;
+        showBanner(`${plan.label}  ${plan.design.name}`, subtitle, joinFailed ? 2600 : 1800);
         gameLoop();
         music.start();
     } catch (error) {
@@ -5191,7 +7216,7 @@ function gameOver() {
     if (finalCoins) finalCoins.textContent = gameState.coins;
 
     const finalLevel = document.getElementById('final-level');
-    if (finalLevel) finalLevel.textContent = gameState.level;
+    if (finalLevel) finalLevel.textContent = gameState.worldLabel || worldLabel();
 
     setScreenVisible('game-over-screen', true);
 

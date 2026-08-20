@@ -27,6 +27,40 @@ works the way you would expect.
 Reach the flagpole at the end of the level. Grabbing it higher up is worth more,
 and whatever is left on the clock is converted into a time bonus.
 
+## The single-player campaign
+
+Six hand-built levels, each with its own setting, its own music, and a new idea
+to get to grips with. Clear the last one and the campaign loops: the same six
+worlds come round again as lap 2, with faster enemies, reinforcements at the
+pipes and less time on the clock. The HUD shows where you are as `lap-level`,
+so `2-3` is the caverns on your second time through.
+
+| World | Level | What it brings |
+| --- | --- | --- |
+| 1-1 | **Green Hills** | The basics: stomping, blocks, short pits, pipes. |
+| 1-2 | **Cobalt Coast** | Wider chasms and bounce pads that fire you into the cloud line. |
+| 1-3 | **Crystal Caverns** | Underground. Spikes on the floor, rock pillars to climb and kick shells off. |
+| 1-4 | **Skyward Steps** | Almost no floor at all — three chasms crossed on platforms that will not wait for you. |
+| 1-5 | **Frostbite Pass** | Night, and nothing to grip. Momentum carries further than you mean it to. |
+| 1-6 | **Castle Inferno** | Everything at once, with lava under every gap. |
+
+### What is in them
+
+- **Moving platforms** carry you along, horizontally or vertically, and their
+  patrol is linear and deterministic — no two runs differ. Ride one into a wall
+  and it leaves you behind rather than burying you in the rock.
+- **Bounce pads** throw you roughly twice as high as a jump, and higher still if
+  you are holding the jump button as you land.
+- **Spikes** cost a big player their size, the same as walking into an enemy.
+- **Lava** fills the chasms of the last level and is fatal whatever size you
+  are — unless you are wearing a star, which throws you clear instead.
+- **Ice** turns the grip down on Frostbite Pass: top speed is unchanged, but you
+  keep sliding after you let go, and turning around takes real distance.
+
+Adding a level means adding an entry to `LEVELS` in `game.js` — ground, ledges,
+blocks, enemies, hazards and the flag, all as data. Everything else, including
+the coin layout, is built from that.
+
 ## Game mechanics
 
 - **Jumping** — variable height: tapping gives a short hop, holding gives a full
@@ -56,7 +90,8 @@ and whatever is left on the clock is converted into a time bonus.
   back on the last patch of solid ground you stood on, with a moment of grace
   and a few seconds of invulnerability before control returns.
 - **Levels** — clearing the flagpole awards a life and moves you to the next
-  world, with faster enemies and reinforcements each time.
+  world. Six levels make a lap; each lap after the first is faster, better
+  defended and shorter on time.
 
 ## Fair spawning
 
@@ -80,6 +115,95 @@ In multiplayer, players share a level, see each other move, compete on a live
 leaderboard, and can stomp each other. Pipes spawn enemies under a single
 elected spawn master so everyone sees the same world. Only the name field
 matters here — it is what other players see.
+
+### Rounds
+
+Multiplayer is played in **rounds**. Everyone shares one clock: two and a half
+minutes in a world, then the standings are settled, then the next world opens.
+Rounds alternate between two games — score attack and territory — described
+below.
+The six campaign levels come round in order, so a session moves the whole party
+through the hills, the coast, the caverns, the sky, the ice and the castle, and
+then round again — the HUD counts the rounds, so round 7 is the hills a second
+time.
+
+There is no flagpole in multiplayer and there never was: the clock is the only
+ending a session has. Before rounds, that meant a multiplayer game had no
+ending at all — one level on an infinite loop, where the only thing the timer
+could do was kill you and reset itself. A round gives the session a shape, and
+a reason to stay for the next one.
+
+- **The clock** reads `Round 2:30` and counts down, turning urgent for the last
+  thirty seconds. Once the whistle blows it flips to `Next` and counts down the
+  twelve-second intermission instead, so the wait is never dead air.
+- **The standings** freeze at the whistle and go up on the banner, best score
+  first, with ties broken on name so the board reads identically on every
+  screen.
+- **The world holds still** for the intermission. Locking the controls would not
+  have been enough: a player left airborne over a pit when the whistle blew
+  would fall into it, and a pit is fatal whatever your health and invulnerability
+  say. Nothing moves, so nothing can take you while you are reading the board.
+- **Score carries** across rounds — a round decides who took that world, not who
+  starts the next one from zero.
+- **A round boundary is an amnesty.** Anyone who ran out of lives is back in for
+  the new world instead of watching it from the out-of-lives screen.
+
+### Territory
+
+Rounds alternate between two games, and which one you get is worked out from the
+round counter rather than stored — same counter, same answer on every client,
+with no field to keep in step. There is no lobby to pick and nothing to vote on:
+the party plays whatever the round says, which is the same reason the worlds
+rotate. Because there is an even number of worlds, the lap is folded into the
+sum as well; otherwise Green Hills would be score attack for all eternity.
+
+**Score attack** is the game as it was: coins, stomps, and the leaderboard.
+
+**Territory** is the ledges. Every ledge you can stand on belongs to whoever
+touched it last, painted in their colour, and the board on the right turns into
+a live percentage of the map.
+
+- **The ground is not capturable, on purpose.** The ground segments are 700–900px
+  wide against 160–200px ledges, so counting them would make jogging along the
+  floor the whole game and the platforming irrelevant. Leaving the floor neutral
+  is what pushes everybody up into the air, which is where the contest is.
+- **Touched, not landed on.** The claim runs on every frame you are stood on
+  something, so walking from one ledge onto the next takes the second one too.
+  It short-circuits on ledges already yours, so standing still is not a write
+  every frame — a capture is written only when a ledge actually changes hands.
+- **Holding pays**, one point per ledge per second. Without that the whole game
+  is one fast lap at the death: last touch wins, so whoever laps last takes
+  everything and the previous two minutes were decoration. Paying for held
+  ground makes defending a corner of the map worth as much as sprinting round
+  it — and gives stomping somebody off their ledge a point, which is the first
+  time PvP has had one.
+- **Taking a ledge off somebody** scores; colouring in a loose one does not.
+- **At the whistle** the round is settled on share of the map, and your final
+  share is paid into your score, which is the one currency the session and the
+  all-time table share.
+- A player who quits mid-round **leaves their colour on the board** rather than
+  having their ledges turn grey.
+
+A tile is identified across the network by nothing more than its index in the
+level's platform list. That works only because levels are built from data in a
+fixed order with no randomness anywhere in the layout, so every client numbers
+the ledges identically without agreeing on anything first — and `tests.html`
+rebuilds every level in the campaign twice and compares the numbering, so the
+day someone reaches for `Math.random` in a layout, that is the test that fails.
+
+Unlike a coin, a capture is not a transaction and should not be: last write wins
+is exactly what taking a ledge means, where two players banking the same coin is
+a bug.
+
+Every client derives all of this — which world, how long is left, whether we are
+playing or reading the board — from a single shared timestamp, rather than
+anybody broadcasting "the round has ended". That is what lets somebody who joins
+ninety seconds in land in the right world with the right time left on the clock
+and no catch-up traffic at all. The spawn master is the only client that writes
+the round on, and the write is a transaction guarded on the round it is
+advancing *from*, so if the role changes hands mid-intermission the second
+client reads an index that has already moved and aborts. Advancing is therefore
+idempotent, which is what stops a handover skipping a world.
 
 Multiplayer can be unavailable in two ways, and they surface differently. If the
 Firebase SDK never loaded there is nothing to join, so the button is disabled on
@@ -126,6 +250,19 @@ names cannot contain a slash. The reasoning therefore lives here:
   elected spawn master actually writes it, but the election is client-side, so
   the rules cannot express which client that is. Field validation is the
   available protection here, not authorship.
+- **`round`** — the shared clock, writable by any signed-in player for the same
+  reason `enemies` is: the spawn master election is client-side, so the rules
+  cannot express which client is entitled to write it. What they *can* express
+  is that `index` only ever goes up. Nobody can rewind a session to replay a
+  world, and a stale client cannot clobber the round everybody else has moved
+  on to. `duration` is bounded at both ends so a bad write cannot leave the
+  party staring at a twelve-hour countdown; the client clamps it again on read.
+- **`territory/$tile`** — who owns which ledge. `owner` is validated as
+  `auth.uid`, so the rule enforces the mechanic: you can only ever claim a ledge
+  *for yourself*, never assign one to somebody else. Clearing a tile is allowed
+  because that is how the map is wiped between worlds — and clearing somebody's
+  ledge is not an attack the game does not already permit, since taking it is
+  the point.
 - **`hits/$victim`** — a per-player inbox. You read only your own; anyone may
   post a claim into yours stamped with their own uid, and your client decides
   whether to accept it. Only you can clear your inbox.
@@ -165,12 +302,17 @@ decide everyone else is asleep and seize the role.
   without letterboxing and stays sharp on retina panels.
 - **Deterministic levels.** Layout is data-driven and free of `Math.random`, so
   every player in a multiplayer session sees the same platforms and coins.
-- **Grid-aligned level.** Everything sits on a 40px grid — one cell is exactly
+- **Grid-aligned levels.** Everything sits on a 40px grid — one cell is exactly
   the player's width and height — and tiers are spaced three cells apart, well
   inside the ~158px a standing jump clears. Building on the grid is what keeps
   every gap either genuinely passable or honestly solid; hand-placed geometry
   drifts into 20 and 30px slots that look like openings but are too tight to
-  walk into. `tests.html` re-checks this on every run.
+  walk into. `tests.html` re-checks every level in the campaign on every run.
+- **Levels as data, themes as tables.** A level is a plain object — where the
+  ground breaks, what to stand on, what wants to kill you — and its theme is a
+  table entry giving the sky, the backdrop, the dirt, the masonry and the tune.
+  No renderer hard-codes a colour, so a new setting is a table entry rather than
+  a new drawing routine.
 - **Collision courtesies.** Clipping a few pixels of a block's corner on the
   way up slides you past it instead of killing the jump, and resolution always
   pushes clear of the deepest overlap so nothing ends up embedded in a stack of
@@ -194,22 +336,37 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 83 checks covering
+Open `tests.html` in a browser to run the test suite — 145 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
-level construction, level geometry (no overlapping solids, no impassable gaps,
-every tier reachable, every pit jumpable), block and power-up behaviour, and the
-death and respawn sequence, enemy behaviour at ledges, enemy population
-limits, fair spawning, hitbox fidelity against the rendered sprite, enemy
-artwork (the turtle's head and neck are scanned for in the rendered frame),
-power-up safety (a loose power-up turns at a ledge, and every power-up block
-has a runway before the next pit), and shadow casting, alongside DOM and
-configuration checks.
+level construction, block and power-up behaviour, the death and respawn
+sequence, enemy behaviour at ledges, enemy population limits, fair spawning,
+hitbox fidelity against the rendered sprite, enemy artwork (the turtle's head
+and neck are scanned for in the rendered frame), power-up safety, moving
+platforms, springs and hazards, the multiplayer round clock, territory
+capture, and shadow casting, alongside DOM and configuration checks.
+
+The round suite is worth a word on how it is written. Everything the round
+system decides is a pure function of one timestamp — which world, how much time
+is left, whether the world should be frozen — so the whole of it is tested by
+handing those functions a synthetic round and a made-up clock. No database, no
+second browser, no waiting two and a half minutes for a round to end.
+
+The level-geometry suite runs against **every level in the campaign**, not just
+the first one — a stage you only reach on the fourth clear is exactly the one
+nobody plays by hand before shipping. It holds each of them to the same
+standard: no overlapping solids, no gap too narrow to walk into or too short to
+duck under, every surface has somewhere to stand, every tier within a jump of
+the one below, every chasm crossable (counting moving platforms along their
+whole patrol as stepping stones), no wall along the floor taller than a jump,
+nothing hanging at head height over a pit, moving platforms that never sweep
+into the scenery, bounce pads with room to bounce and land, and lava that fills
+a chasm rather than blocking a path.
 
 Built with:
 
 - HTML5 Canvas for rendering
 - Vanilla JavaScript for game logic
-- Web Audio API for sound effects and the chiptune loop
+- Web Audio API for sound effects and the chiptune loops (one per setting)
 - Firebase Realtime Database for multiplayer
 - CSS3 for the UI
 
