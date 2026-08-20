@@ -2327,6 +2327,144 @@
             });
         });
 
+        // Test Suite: Subscription failures
+        const subscriptionTests = new TestRunner('Subscription Failures');
+
+        // A ref that refuses everything, the way Firebase does when the rules
+        // deny a read: the value callback never fires, the cancel callback does.
+        function deniedRef() {
+            const registrations = [];
+            const error = Object.assign(
+                new Error("permission_denied at /round: Client doesn't have permission to access the desired data."),
+                { code: 'PERMISSION_DENIED' }
+            );
+            return {
+                registrations,
+                error,
+                on(event, callback, cancelCallback) {
+                    registrations.push({ event, hasCancelCallback: typeof cancelCallback === 'function' });
+                    if (cancelCallback) cancelCallback(error);
+                },
+                off() {},
+                child() { return this; },
+                async transaction() { throw error; },
+                async once() { throw error; },
+            };
+        }
+
+        subscriptionTests.test('The round listener registers a cancel callback', () => {
+            // Without one, Firebase reports a denied read to nobody: the
+            // callback simply never fires again and a round clock that never
+            // arrived looks exactly like one still loading. That silence is
+            // what made a missing rules deploy look like a game bug.
+            const savedRef = multiplayerState.roundRef;
+            const savedRound = multiplayerState.round;
+            const savedReported = multiplayer.reportedRulesProblem;
+            const ref = deniedRef();
+
+            try {
+                multiplayerState.roundRef = ref;
+                multiplayer.reportedRulesProblem = true; // no banner during tests
+                multiplayer.listenForRound();
+
+                assert(ref.registrations.length > 0, 'The round listener registered nothing');
+                assert(ref.registrations.every(r => r.hasCancelCallback),
+                    'Every round subscription must pass a cancel callback');
+            } finally {
+                multiplayerState.roundRef = savedRef;
+                multiplayerState.round = savedRound;
+                multiplayer.reportedRulesProblem = savedReported;
+            }
+        });
+
+        subscriptionTests.test('The territory listener registers a cancel callback', () => {
+            const savedRef = territoryState.ref;
+            const savedReported = multiplayer.reportedRulesProblem;
+            const ref = deniedRef();
+
+            try {
+                territoryState.ref = ref;
+                multiplayer.reportedRulesProblem = true;
+                multiplayer.listenForTerritory();
+
+                assert(ref.registrations.length > 0, 'The territory listener registered nothing');
+                assert(ref.registrations.every(r => r.hasCancelCallback),
+                    'Every territory subscription must pass a cancel callback');
+            } finally {
+                territoryState.ref = savedRef;
+                multiplayer.reportedRulesProblem = savedReported;
+            }
+        });
+
+        subscriptionTests.test('A denied subscription names the rules as the cause', () => {
+            const savedReported = multiplayer.reportedRulesProblem;
+            const realError = console.error;
+            const lines = [];
+            console.error = (...args) => { lines.push(args.map(String).join(' ')); };
+
+            try {
+                multiplayer.reportedRulesProblem = false;
+                multiplayer.onSubscriptionDenied('round', deniedRef().error);
+
+                const all = lines.join('\n');
+                assert(/round/.test(all), 'The failure should name the path that was denied');
+                assert(/database\.rules\.json/.test(all),
+                    'A permission denial should point at the rules file, not just log the error');
+                assert(multiplayer.reportedRulesProblem === true, 'The report should latch');
+
+                // Latched: a second denial must not nag again.
+                const before = lines.length;
+                multiplayer.onSubscriptionDenied('territory', deniedRef().error);
+                assert(lines.length > before, 'Every failure should still be logged');
+                assert(lines.slice(before).join('\n').indexOf('database.rules.json') === -1,
+                    'The rules advice should be given once, not on every denial');
+            } finally {
+                console.error = realError;
+                multiplayer.reportedRulesProblem = savedReported;
+            }
+        });
+
+        subscriptionTests.test('A failure that is not a denial is logged but not blamed on the rules', () => {
+            const savedReported = multiplayer.reportedRulesProblem;
+            const realError = console.error;
+            const lines = [];
+            console.error = (...args) => { lines.push(args.map(String).join(' ')); };
+
+            try {
+                multiplayer.reportedRulesProblem = false;
+                multiplayer.onSubscriptionDenied('round', new Error('network unreachable'));
+
+                assert(lines.length > 0, 'The failure should still be logged');
+                assert(lines.join('\n').indexOf('database.rules.json') === -1,
+                    'A network failure must not be reported as a rules problem');
+                assertEqual(multiplayer.reportedRulesProblem, false, 'A network failure should not latch');
+            } finally {
+                console.error = realError;
+                multiplayer.reportedRulesProblem = savedReported;
+            }
+        });
+
+        subscriptionTests.test('Without a round the clock is blank rather than wrong', () => {
+            // The honest failure. There is deliberately no local fallback clock:
+            // one would tick independently on every client and desync the world
+            // rotation, which is worse than showing nothing.
+            const saved = { round: multiplayerState.round, connected: multiplayerState.connected };
+            const timeEl = document.getElementById('time');
+            const savedText = timeEl.textContent;
+
+            try {
+                multiplayerState.connected = true;
+                multiplayerState.round = null;
+                updateClockDisplay();
+                assertEqual(timeEl.textContent, '--', 'With no round the clock shows nothing, not a guess');
+                assertEqual(isTerritoryRound(), false, 'And no territory round can start');
+            } finally {
+                multiplayerState.round = saved.round;
+                multiplayerState.connected = saved.connected;
+                timeEl.textContent = savedText;
+            }
+        });
+
         // Run all tests
         async function runAllTests() {
             const suites = [
@@ -2353,7 +2491,8 @@
                 pwaTests,
                 multiplayerTests,
                 roundTests,
-                territoryTests
+                territoryTests,
+                subscriptionTests
             ];
 
             const allResults = [];

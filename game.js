@@ -445,6 +445,9 @@ class MultiplayerManager {
 
             multiplayerState.playerId = uid;
             multiplayerState.playerName = playerName || 'Anonymous';
+            // Reported once per connection, not once per page: a rules problem
+            // fixed between two runs should be able to report itself again.
+            this.reportedRulesProblem = false;
 
             // Assign color based on player ID hash
             const colorIndex = Math.abs(this.hashCode(multiplayerState.playerId)) % PLAYER_COLORS.length;
@@ -548,6 +551,35 @@ class MultiplayerManager {
         return Date.now() + multiplayerState.serverTimeOffset;
     }
 
+    /**
+     * A subscription the server refused. Firebase delivers this to the third
+     * argument of .on(), and a listener registered without one fails in total
+     * silence - the callback simply never fires again. That is how a round
+     * clock that never arrived came to look identical to one still loading.
+     *
+     * Almost always this is the rules: a node added to database.rules.json but
+     * never deployed is denied by the root's `.read: false`, and everything
+     * else carries on working, which makes it look like a game bug rather than
+     * a deployment one.
+     */
+    onSubscriptionDenied(path, error) {
+        const denied = error && (error.code === 'PERMISSION_DENIED' || /permission_denied/i.test(error.message || ''));
+        console.error(`Multiplayer: subscription to "${path}" failed`, error);
+
+        if (!denied || this.reportedRulesProblem) return;
+        this.reportedRulesProblem = true;
+
+        console.error(
+            `Multiplayer: the database rules do not grant access to "${path}". ` +
+            'Deploy database.rules.json to the Firebase project ' +
+            '(Realtime Database -> Rules, or `firebase deploy --only database`).'
+        );
+
+        // The player cannot fix this, but they can be told that what they are
+        // looking at is broken rather than merely slow.
+        showBanner('Round clock unavailable', 'The server rules need updating - playing without rounds', 5000);
+    }
+
     // ---- Territory ---------------------------------------------------------
 
     // Ownership is a flat node of tile -> uid. There is no transaction here and
@@ -563,11 +595,13 @@ class MultiplayerManager {
             setTileOwner(tileId, data.owner);
         };
 
-        territoryState.ref.on('child_added', apply);
-        territoryState.ref.on('child_changed', apply);
+        const denied = (error) => this.onSubscriptionDenied('territory', error);
+
+        territoryState.ref.on('child_added', apply, denied);
+        territoryState.ref.on('child_changed', apply, denied);
         territoryState.ref.on('child_removed', (snapshot) => {
             setTileOwner(tileIdFromKey(snapshot.key), null);
-        });
+        }, denied);
     }
 
     async claimTile(tileId) {
@@ -618,7 +652,7 @@ class MultiplayerManager {
             if (!previous || previous.index !== multiplayerState.round.index) {
                 onRoundStarted(previous);
             }
-        });
+        }, (error) => this.onSubscriptionDenied('round', error));
     }
 
     // Opens round zero if the session has none. Guarded by a transaction, so
@@ -734,7 +768,7 @@ class MultiplayerManager {
             multiplayerState.remotePlayers.delete(snapshot.key);
             multiplayerState.playerMeta.delete(snapshot.key);
             this.onPlayersChanged();
-        });
+        }, (error) => this.onSubscriptionDenied('players', error));
     }
 
     applyPlayerSnapshot(id, data) {
@@ -907,8 +941,10 @@ class MultiplayerManager {
             coin.respawnTime = (snapshot.val() || {}).respawnTime;
         };
 
-        multiplayerState.coinsRef.on('child_added', claim);
-        multiplayerState.coinsRef.on('child_changed', claim);
+        const denied = (error) => this.onSubscriptionDenied('coins', error);
+
+        multiplayerState.coinsRef.on('child_added', claim, denied);
+        multiplayerState.coinsRef.on('child_changed', claim, denied);
 
         // A collected coin is represented by the node existing, so removal is
         // the respawn signal. The old 'value' handler could only ever set
@@ -919,7 +955,7 @@ class MultiplayerManager {
             if (!coin) return;
             coin.collected = false;
             coin.respawnTime = null;
-        });
+        }, denied);
     }
 
     listenForEnemies() {
@@ -969,7 +1005,7 @@ class MultiplayerManager {
             if (index !== -1) {
                 enemies.splice(index, 1);
             }
-        });
+        }, (error) => this.onSubscriptionDenied('enemies', error));
     }
 
     listenForHits() {

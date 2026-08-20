@@ -133,6 +133,11 @@ ending at all — one level on an infinite loop, where the only thing the timer
 could do was kill you and reset itself. A round gives the session a shape, and
 a reason to stay for the next one.
 
+- **A clock stuck on `--`** means the round never arrived — almost always the
+  rules for `round` have not been deployed. There is deliberately no local
+  fallback clock: one would tick independently on every client and desync the
+  world rotation, which is worse than showing nothing. The game says so in a
+  banner and names the fix in the console rather than failing silently.
 - **The clock** reads `Round 2:30` and counts down, turning urgent for the last
   thirty seconds. Once the whistle blows it flips to `Next` and counts down the
   twelve-second intermission instead, so the wait is never dead air.
@@ -224,6 +229,13 @@ Multiplayer needs two things configured on the Firebase project, both under
    `firebase deploy --only database`). The default test-mode rules expire 30
    days after they are created, after which every read and write is denied and
    multiplayer silently stops working for everybody.
+
+> **Redeploy the rules whenever the game gains a new node.** The root of
+> `database.rules.json` denies everything by default, so a node the rules have
+> never heard of is denied to every client. The rest of multiplayer carries on
+> working, which makes it look like a bug in the game rather than a deployment
+> that never happened. `round` and `territory` are the most recent additions: if
+> the clock in the HUD reads `--` and the worlds never rotate, this is why.
 
 Anonymous auth is not a gate on who can play — anyone holding the public web
 config can mint a token. It is there so each player has a server-verified
@@ -336,14 +348,15 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 145 checks covering
+Open `tests.html` in a browser to run the test suite — 150 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, block and power-up behaviour, the death and respawn
 sequence, enemy behaviour at ledges, enemy population limits, fair spawning,
 hitbox fidelity against the rendered sprite, enemy artwork (the turtle's head
 and neck are scanned for in the rendered frame), power-up safety, moving
 platforms, springs and hazards, the multiplayer round clock, territory
-capture, and shadow casting, alongside DOM and configuration checks.
+capture, what happens when the server refuses a subscription, and shadow
+casting, alongside DOM and configuration checks.
 
 The round suite is worth a word on how it is written. Everything the round
 system decides is a pure function of one timestamp — which world, how much time
