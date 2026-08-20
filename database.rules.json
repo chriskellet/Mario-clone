@@ -30,12 +30,12 @@
 
       "$coin": {
         ".write": "auth != null && (!data.exists() || !newData.exists() || data.child('collectedBy').val() === auth.uid)",
-        ".validate": "newData.hasChildren(['collected', 'collectedBy'])",
+        ".validate": "newData.hasChildren(['collected', 'collectedBy', 'respawnTime'])",
 
         "collected": { ".validate": "newData.isBoolean()" },
         "collectedBy": { ".validate": "newData.val() === auth.uid" },
-        "collectedAt": { ".validate": "newData.isNumber()" },
-        "respawnTime": { ".validate": "newData.isNumber()" },
+        "collectedAt": { ".validate": "newData.isNumber() && newData.val() <= now + 60000" },
+        "respawnTime": { ".validate": "newData.isNumber() && newData.val() <= now + 120000" },
         "$other": { ".validate": false }
       }
     },

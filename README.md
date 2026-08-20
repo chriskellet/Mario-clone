@@ -80,8 +80,13 @@ the coin layout, is built from that.
   standing on top of it.
 - **Power-ups** — a mushroom makes you big (one free hit and the ability to
   smash bricks); a star makes you briefly invincible and lethal on contact.
-  Like everything else that walks, a loose power-up turns back at a drop
-  instead of throwing itself into the pit a second after you earned it.
+  A loose power-up walks off the end of a platform and comes down to you —
+  unlike everything else that walks, which turns back at any edge. It turns back
+  only at a genuine pit, where there is nothing below it at all, so it never
+  throws itself away a second after you earned it. The distinction matters
+  because a mushroom sprouts onto the block row it came out of: turning back at
+  both ends of a three-block roof left it pacing up there, out of reach, which
+  is the same reward taken away, only slower.
 - **Coins** — 50 points each, and every 100 coins is an extra life.
 - **Pits and the clock** — falling into a gap or running the timer out costs a
   life regardless of size.
@@ -257,7 +262,13 @@ names cannot contain a slash. The reasoning therefore lives here:
 - **`coins/$coin`** — a node exists only while that coin is banked. A claim may
   be written when the coin is free, and cleared by anyone once it respawns, but
   a live claim cannot be overwritten. That, together with the client-side
-  transaction, is what stops two players banking the same coin.
+  transaction, is what stops two players banking the same coin. A claim must
+  carry a `respawnTime`, and one further ahead than two minutes is rejected: a
+  claim is the only thing keeping a coin out of play, so a missing or absurd
+  expiry is a coin deleted from the world for everybody. The client is
+  defensive about this on the way in as well, treating anything it cannot read
+  as already expired, which is what lets a coin poisoned by an older version
+  heal itself the next time somebody plays.
 - **`enemies`** — shared world state, writable by any signed-in player. Only the
   elected spawn master actually writes it, but the election is client-side, so
   the rules cannot express which client that is. Field validation is the
@@ -348,15 +359,15 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 150 checks covering
+Open `tests.html` in a browser to run the test suite — 156 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, block and power-up behaviour, the death and respawn
 sequence, enemy behaviour at ledges, enemy population limits, fair spawning,
 hitbox fidelity against the rendered sprite, enemy artwork (the turtle's head
 and neck are scanned for in the rendered frame), power-up safety, moving
 platforms, springs and hazards, the multiplayer round clock, territory
-capture, what happens when the server refuses a subscription, and shadow
-casting, alongside DOM and configuration checks.
+capture, coin claims and their expiry, what happens when the server refuses a
+subscription, and shadow casting, alongside DOM and configuration checks.
 
 The round suite is worth a word on how it is written. Everything the round
 system decides is a pure function of one timestamp — which world, how much time

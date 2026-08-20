@@ -68,6 +68,11 @@ const CONFIG = {
     SPRING_POWER_HELD: -18.5,  // ...and higher still with jump held
     STAR_DURATION: 600,        // 10 seconds of invincibility
     ENEMY_RESPAWN_MS: 8000,
+    COIN_RESPAWN_MS: 10000,    // How long a banked coin stays banked
+    // A claim further ahead than this is not believed. It can only come from a
+    // device whose clock is wrong, and the cost of trusting it is a coin that
+    // nobody can collect until that clock's idea of the time comes round.
+    COIN_RESPAWN_MAX_MS: 60000,
     MAX_ENEMIES_PER_TYPE: 3,
     PORTAL_SPAWN_MIN: 900,     // 15s between spawns at the very least
     PORTAL_SPAWN_RANGE: 600,   // ...up to 25s
@@ -924,6 +929,24 @@ class MultiplayerManager {
         }
     }
 
+    /**
+     * When a banked coin is due back, given whatever the database happens to
+     * hold. A claim is the only thing keeping a coin out of play, so anything
+     * that cannot be read as a time is treated as already expired rather than
+     * as "never": a node written without a respawnTime - by an older version of
+     * the game, or a partial write - used to leave that coin collected forever,
+     * and the claim transaction then refused every attempt to take it again.
+     * One unreadable field permanently deleted a coin from the world.
+     *
+     * A time implausibly far ahead is from a device with a wrong clock, and is
+     * brought back to the normal delay rather than believed.
+     */
+    respawnDeadline(stored) {
+        const now = this.serverNow();
+        if (typeof stored !== 'number' || !Number.isFinite(stored)) return now;
+        return Math.min(stored, now + CONFIG.COIN_RESPAWN_MAX_MS);
+    }
+
     coinFromKey(key) {
         const index = Number.parseInt(String(key).replace('coin_', ''), 10);
         if (!Number.isInteger(index)) return null;
@@ -938,7 +961,7 @@ class MultiplayerManager {
             const coin = this.coinFromKey(snapshot.key);
             if (!coin) return;
             coin.collected = true;
-            coin.respawnTime = (snapshot.val() || {}).respawnTime;
+            coin.respawnTime = this.respawnDeadline((snapshot.val() || {}).respawnTime);
         };
 
         const denied = (error) => this.onSubscriptionDenied('coins', error);
@@ -1245,11 +1268,16 @@ class MultiplayerManager {
             // Use transaction to prevent race conditions
             const result = await coinRef.transaction((current) => {
                 if (current === null || current.collected === false) {
+                    // Server time, not this device's. Every other client
+                    // compares this against their own corrected clock, so a
+                    // local Date.now() from a device running fast banked the
+                    // coin for everybody else until their clock caught up.
+                    const now = this.serverNow();
                     return {
                         collected: true,
                         collectedBy: multiplayerState.playerId,
-                        collectedAt: Date.now(),
-                        respawnTime: Date.now() + 10000, // 10 seconds
+                        collectedAt: now,
+                        respawnTime: now + CONFIG.COIN_RESPAWN_MS,
                     };
                 }
                 return undefined; // Abort - coin already collected
@@ -2267,6 +2295,32 @@ function drawGroundShadow(entity, centerScreenX) {
 }
 
 // Is there something to stand on just past the entity's leading edge?
+/**
+ * Is there anything to land on beyond the edge ahead - at any depth?
+ *
+ * hasFloorAhead only asks whether the floor continues at this height, which is
+ * the right question for something that should never leave the ledge it is on.
+ * It is the wrong question for a power-up: a mushroom sprouting from a block
+ * row lands on the blocks themselves, and turning back at both ends of a
+ * three-block row leaves it pacing on the roof forever, above a player who
+ * cannot reach it. This asks the question that actually matters - is that a
+ * ledge with ground under it, or a pit - so a power-up walks off the end of a
+ * platform and turns back only where there is genuinely nothing below.
+ */
+function landingBelowAhead(entity, direction) {
+    const probeX = direction > 0 ? entity.x + entity.width + 4 : entity.x - 4;
+    const feet = entity.y + entity.height;
+
+    for (const solid of solidCache) {
+        if (probeX < solid.x || probeX > solid.x + solid.width) continue;
+        // A solid whose top is above our feet is a wall we would hit, not a
+        // floor we would land on.
+        if (solid.y < feet - 2) continue;
+        return true;
+    }
+    return false;
+}
+
 function hasFloorAhead(entity, direction) {
     const probeX = direction > 0 ? entity.x + entity.width + 4 : entity.x - 4;
     const probeY = entity.y + entity.height + 6;
@@ -4211,11 +4265,12 @@ class PowerUp {
         const hit = moveAndCollide(this);
         if (hit.hitWall !== 0) this.velocityX = -this.velocityX;
 
-        // Turn back at a drop rather than walking off it. A power-up that
-        // throws itself into a pit a second after you earned it is just a
-        // reward taken away again.
+        // Walk off the end of a platform, but turn back at a pit. A power-up
+        // that throws itself into a pit a second after you earned it is a
+        // reward taken away again - but one that paces the block row it came
+        // out of, out of reach, is the same thing more slowly.
         if (this.onGround && this.velocityX !== 0 &&
-            !hasFloorAhead(this, Math.sign(this.velocityX))) {
+            !landingBelowAhead(this, Math.sign(this.velocityX))) {
             this.velocityX = -this.velocityX;
         }
 
@@ -4625,11 +4680,13 @@ class Coin {
         this.rotation += 0.09;
         this.bob += 0.05;
 
-        // Check if coin should respawn
-        if (this.collected && this.respawnTime && Date.now() >= this.respawnTime) {
+        // Banked coins come back. Compared against the server-corrected clock,
+        // because that is the clock the deadline was written on.
+        if (this.collected && multiplayerState.connected && this.respawnTime !== null &&
+            multiplayer.serverNow() >= this.respawnTime) {
             this.collected = false;
             this.respawnTime = null;
-            if (multiplayerState.connected && multiplayerState.coinsRef) {
+            if (multiplayerState.coinsRef) {
                 multiplayerState.coinsRef.child(`coin_${this.index}`).remove();
             }
         }

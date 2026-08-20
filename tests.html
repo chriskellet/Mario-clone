@@ -1372,6 +1372,58 @@
                 `it walked ${Math.round(furthest - (seg.x + seg.width))}px past the edge`);
         });
 
+        powerUpTests.test('a power-up walks off a block row instead of pacing on it', () => {
+            // A mushroom sprouts from a block row and lands on the blocks
+            // themselves. Turning back at both ends left it pacing the roof
+            // forever, above a player who could not reach it - the ledge rule
+            // was written for pits and was being applied to a three-block roof.
+            initLevel();
+            rebuildSolids();
+
+            const row = blocks.filter(bk => Math.abs(bk.y - BLOCK_ROW_Y) < 2).sort((x, y) => x.x - y.x);
+            assert(row.length > 0, 'the level has no block row to test with');
+
+            // Keep the player well away so it cannot be collected mid-flight.
+            player.x = CONFIG.WORLD_WIDTH - 200;
+            player.y = 0;
+
+            powerUps.length = 0;
+            const shroom = new PowerUp(row[0].x, row[0].y - CONFIG.POWERUP_SIZE, 'mushroom');
+            shroom.sproutTime = 0;
+            shroom.velocityX = CONFIG.POWERUP_SPEED;
+            powerUps.push(shroom);
+
+            const startedAt = shroom.y;
+            for (let i = 0; i < 400 && !shroom.collected; i++) shroom.update();
+
+            assert(!shroom.collected, 'the power-up should not have been lost');
+            assert(shroom.y > startedAt + GRID,
+                `the power-up is still up on the blocks (y ${Math.round(shroom.y)} vs ${Math.round(startedAt)})`);
+            assert(shroom.y < CONFIG.WORLD_HEIGHT,
+                'the power-up fell out of the world instead of landing');
+        });
+
+        powerUpTests.test('a power-up still refuses a pit with nothing under it', () => {
+            // The other half of the same rule: walking off a ledge is fine
+            // because there is ground below, walking off the ground is not.
+            initLevel();
+            rebuildSolids();
+
+            const seg = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x)[0];
+            // Positioned so the probe lands just past the edge, not on it.
+            const onGroundEdge = { x: seg.x + seg.width - 30, y: seg.y - 30, width: 30, height: 30 };
+            assertEqual(landingBelowAhead(onGroundEdge, 1), false,
+                'there is nothing below the far side of a ground edge');
+
+            const row = blocks.filter(bk => Math.abs(bk.y - BLOCK_ROW_Y) < 2).sort((x, y) => x.x - y.x);
+            if (row.length) {
+                const last = row[row.length - 1];
+                const onBlockEdge = { x: last.x + last.width - 30, y: row[0].y - 30, width: 30, height: 30 };
+                assertEqual(landingBelowAhead(onBlockEdge, 1), true,
+                    'there is ground below the end of a block row');
+            }
+        });
+
         powerUpTests.test('every mushroom block has a runway before the next pit', () => {
             eachLevel((design, label) => {
                 const ground = platforms.filter(p => p.variant === 'ground').sort((a, b) => a.x - b.x);
@@ -2327,6 +2379,102 @@
             });
         });
 
+        // Test Suite: Coin claims
+        const coinClaimTests = new TestRunner('Coin Claims');
+
+        function withServerNow(now, fn) {
+            const real = multiplayer.serverNow;
+            multiplayer.serverNow = () => now;
+            try { return fn(); } finally { multiplayer.serverNow = real; }
+        }
+
+        coinClaimTests.test('An unreadable respawn time frees the coin instead of killing it', () => {
+            // A claim is the only thing keeping a coin out of play, and the
+            // claim transaction refuses to overwrite a live one. So a stored
+            // claim with no readable respawn time used to remove that coin from
+            // the world permanently, for everybody - which is what a node
+            // written by an older version of the game looked like.
+            const now = 1_700_000_000_000;
+            withServerNow(now, () => {
+                assertEqual(multiplayer.respawnDeadline(undefined), now,
+                    'A missing respawn time should read as due now');
+                assertEqual(multiplayer.respawnDeadline(null), now,
+                    'A null respawn time should read as due now');
+                assertEqual(multiplayer.respawnDeadline('soon'), now,
+                    'A non-numeric respawn time should read as due now');
+                assertEqual(multiplayer.respawnDeadline(NaN), now,
+                    'NaN should read as due now, not as never');
+                assertEqual(multiplayer.respawnDeadline(Infinity), now,
+                    'Infinity should read as due now, not as never');
+            });
+        });
+
+        coinClaimTests.test('A respawn time from a wrong clock is not believed', () => {
+            const now = 1_700_000_000_000;
+            withServerNow(now, () => {
+                // A device an hour fast would otherwise bank the coin for an hour.
+                const wayAhead = now + 60 * 60 * 1000;
+                assertEqual(multiplayer.respawnDeadline(wayAhead), now + CONFIG.COIN_RESPAWN_MAX_MS,
+                    'A far-future claim should be capped');
+
+                // An ordinary claim is left alone.
+                const normal = now + CONFIG.COIN_RESPAWN_MS;
+                assertEqual(multiplayer.respawnDeadline(normal), normal,
+                    'A normal claim should pass through untouched');
+
+                // One already due stays due.
+                assertEqual(multiplayer.respawnDeadline(now - 5000), now - 5000,
+                    'A claim already expired should stay expired');
+            });
+        });
+
+        coinClaimTests.test('A stale claim lets the coin come back', () => {
+            // The end-to-end version of the two checks above: a coin holding a
+            // claim the game cannot read should be collectable again.
+            const saved = { connected: multiplayerState.connected, ref: multiplayerState.coinsRef };
+            try {
+                initLevel();
+                assert(coins.length > 0, 'the level built no coins');
+
+                const coin = coins[0];
+                const removals = [];
+                multiplayerState.connected = true;
+                multiplayerState.coinsRef = { child: (key) => ({ remove: () => removals.push(key) }) };
+
+                withServerNow(1_700_000_000_000, () => {
+                    // What a legacy node looks like coming out of the database.
+                    coin.collected = true;
+                    coin.respawnTime = multiplayer.respawnDeadline(undefined);
+
+                    coin.update();
+
+                    assertEqual(coin.collected, false, 'The coin should be back in play');
+                    assertEqual(removals.length, 1, 'And the stale claim should be cleared from the database');
+                    assertEqual(removals[0], `coin_${coin.index}`, 'The right claim should be cleared');
+                });
+            } finally {
+                multiplayerState.connected = saved.connected;
+                multiplayerState.coinsRef = saved.ref;
+            }
+        });
+
+        coinClaimTests.test('Single player coins do not depend on a server clock', () => {
+            // Coins never respawn solo, and nothing here should reach for the
+            // network clock when there is no network.
+            const saved = multiplayerState.connected;
+            try {
+                initLevel();
+                multiplayerState.connected = false;
+                const coin = coins[0];
+                coin.collected = true;
+                coin.respawnTime = 0;   // long expired, if anything were reading it
+                coin.update();
+                assertEqual(coin.collected, true, 'A solo coin stays collected');
+            } finally {
+                multiplayerState.connected = saved;
+            }
+        });
+
         // Test Suite: Subscription failures
         const subscriptionTests = new TestRunner('Subscription Failures');
 
@@ -2492,6 +2640,7 @@
                 multiplayerTests,
                 roundTests,
                 territoryTests,
+                coinClaimTests,
                 subscriptionTests
             ];
 
