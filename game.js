@@ -299,6 +299,46 @@ const ROUND_PHASE = {
     EXPIRED: 'expired',         // Intermission is over and nobody has advanced yet
 };
 
+// What game a round is. Which one you get is derived from the round counter
+// rather than stored, so every client agrees without a field to keep in step.
+const ROUND_MODES = {
+    SCORE: 'score',             // Coins, stomps and the leaderboard
+    TERRITORY: 'territory',     // Paint the ledges your colour
+};
+
+// ---------------------------------------------------------------------------
+//  TERRITORY
+// ---------------------------------------------------------------------------
+// Every ledge you can stand on belongs to whoever touched it last. The ground
+// itself is deliberately excluded: the ground segments are 700-900px wide
+// against 160-200px ledges, so counting them would make jogging along the floor
+// the whole game and the platforming irrelevant. Leaving them neutral is what
+// pushes everybody up into the air, which is where the contest is.
+const TERRITORY = {
+    HOLD_POINTS_PER_TILE: 1,    // Per tile, per second held
+    STEAL_POINTS: 25,           // For taking a ledge off somebody
+    WIN_BONUS: 2000,            // Multiplied by your final share at the whistle
+};
+
+const territoryState = {
+    ref: null,
+    // tileId -> uid. The source of truth for who owns what: a snapshot can
+    // arrive before or after the level is built, so ownership cannot live on
+    // the platform objects themselves.
+    owners: new Map(),
+    // uid -> palette, remembered for everyone we have ever seen. A player who
+    // quits mid-round leaves their colour on the board behind them, and
+    // remotePlayers no longer has them.
+    colors: new Map(),
+    tileCount: 0,
+    // Server time the last hold payment was made, so holding pays once a second
+    // however many frames go by.
+    lastPaidAt: 0,
+    // Cached shares, recomputed only when ownership actually changes.
+    shares: [],
+    dirty: true,
+};
+
 // Multiplayer State
 const multiplayerState = {
     playerId: null,
@@ -409,6 +449,7 @@ class MultiplayerManager {
             // Assign color based on player ID hash
             const colorIndex = Math.abs(this.hashCode(multiplayerState.playerId)) % PLAYER_COLORS.length;
             multiplayerState.playerColor = PLAYER_COLORS[colorIndex];
+            territoryState.colors.set(uid, multiplayerState.playerColor);
 
             // Set up Firebase references
             multiplayerState.playersRef = this.db.ref('players');
@@ -418,6 +459,7 @@ class MultiplayerManager {
             multiplayerState.portalRef = this.db.ref('portals');
             multiplayerState.hitsRef = this.db.ref('hits');
             multiplayerState.roundRef = this.db.ref('round');
+            territoryState.ref = this.db.ref('territory');
 
             // Initialize player data
             await multiplayerState.playerRef.set({
@@ -461,6 +503,9 @@ class MultiplayerManager {
             // this client is the first into an empty session.
             this.listenForRound();
 
+            // Listen for who owns which ledge.
+            this.listenForTerritory();
+
             // Update leaderboard
             this.updateLeaderboard();
 
@@ -501,6 +546,41 @@ class MultiplayerManager {
     // them against.
     serverNow() {
         return Date.now() + multiplayerState.serverTimeOffset;
+    }
+
+    // ---- Territory ---------------------------------------------------------
+
+    // Ownership is a flat node of tile -> uid. There is no transaction here and
+    // there should not be: last write wins is exactly what capturing a ledge
+    // means, unlike a coin, where two players banking the same one is a bug.
+    listenForTerritory() {
+        if (!territoryState.ref) return;
+
+        const apply = (snapshot) => {
+            const tileId = tileIdFromKey(snapshot.key);
+            const data = snapshot.val();
+            if (tileId === null || !data || !data.owner) return;
+            setTileOwner(tileId, data.owner);
+        };
+
+        territoryState.ref.on('child_added', apply);
+        territoryState.ref.on('child_changed', apply);
+        territoryState.ref.on('child_removed', (snapshot) => {
+            setTileOwner(tileIdFromKey(snapshot.key), null);
+        });
+    }
+
+    async claimTile(tileId) {
+        if (!territoryState.ref || !multiplayerState.connected) return;
+
+        try {
+            await territoryState.ref.child(tileKey(tileId)).set({
+                owner: multiplayerState.playerId,
+                at: this.serverNow(),
+            });
+        } catch (error) {
+            console.error('Failed to claim a ledge:', error);
+        }
     }
 
     // ---- Rounds -----------------------------------------------------------
@@ -615,6 +695,18 @@ class MultiplayerManager {
                 }));
             }
 
+            // Territory is per-world by definition, and the rules put .write on
+            // territory/$tile for the same reason, so it is cleared the same
+            // way. Carrying it over would open a new world with the last one's
+            // map already painted in.
+            if (territoryState.ref) {
+                jobs.push(territoryState.ref.once('value').then((snapshot) => {
+                    const cleared = {};
+                    snapshot.forEach((child) => { cleared[child.key] = null; });
+                    if (Object.keys(cleared).length) return territoryState.ref.update(cleared);
+                }));
+            }
+
             await Promise.all(jobs);
         } catch (error) {
             console.error('Failed to clear the world between rounds:', error);
@@ -671,9 +763,14 @@ class MultiplayerManager {
             existingPlayer.timestamp = data.timestamp || this.serverNow();
         } else {
             // New player - initialize with current position
+            const palette = PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0];
+            // Remembered separately so their ledges keep their colour after
+            // they leave and this entry is gone.
+            territoryState.colors.set(id, palette);
+
             multiplayerState.remotePlayers.set(id, {
                 name: data.name || 'Unknown Player',
-                color: PLAYER_COLORS.find(c => c.name === data.color) || PLAYER_COLORS[0],
+                color: palette,
                 x: data.x || 0,
                 y: data.y || 0,
                 targetX: data.x || 0,
@@ -1239,6 +1336,11 @@ class MultiplayerManager {
         const leaderboardList = document.getElementById('leaderboard-list');
         if (!leaderboardList) return;
 
+        if (isTerritoryRound()) {
+            this.updateTerritoryUI(leaderboardList);
+            return;
+        }
+
         // Combine current player with remote players
         const allPlayers = [
             {
@@ -1267,6 +1369,10 @@ class MultiplayerManager {
             leaderboard.classList.remove('hidden');
         }
 
+        // The heading is shared with the territory board, so put it back.
+        const heading = document.querySelector('#leaderboard h3');
+        if (heading) heading.textContent = 'Top Players';
+
         // Position updates arrive several times a second per player, but the
         // board only changes when a name, score or the ordering does. Skip the
         // innerHTML rebuild otherwise.
@@ -1282,6 +1388,54 @@ class MultiplayerManager {
                 <span class="score">${Number(player.score) || 0}</span>
             </div>
         `).join('');
+    }
+
+    /**
+     * The live map split, as a bar per player. This is the whole scoreboard of
+     * a territory round: the number that decides it is the share, so that is
+     * what is on screen while it is being fought over, rather than a score
+     * nobody can convert into a position in their head.
+     */
+    updateTerritoryUI(leaderboardList) {
+        const heading = document.querySelector('#leaderboard h3');
+        if (heading) heading.textContent = 'Territory';
+
+        const leaderboard = document.getElementById('leaderboard');
+        if (leaderboard) leaderboard.classList.remove('hidden');
+
+        const shares = territoryShares();
+        const held = shares.reduce((sum, entry) => sum + entry.tiles, 0);
+        const free = Math.max(0, territoryState.tileCount - held);
+
+        const rows = shares.slice(0, 5);
+        const signature = `t:${rows.map(r => `${r.id}:${r.tiles}`).join('|')}:${free}`;
+        if (signature === multiplayerState.lastLeaderboardSignature) return;
+        multiplayerState.lastLeaderboardSignature = signature;
+
+        const bars = rows.map((entry) => {
+            const percent = Math.round(entry.share * 100);
+            const color = (entry.palette && entry.palette.shirt) || '#BBBBBB';
+            return `
+            <div class="territory-entry ${entry.isSelf ? 'you' : ''}">
+                <span class="swatch" style="background:${escapeHtml(color)}"></span>
+                <span class="name">${escapeHtml(entry.name)}${entry.isSelf ? ' (You)' : ''}</span>
+                <span class="share">${percent}%</span>
+                <span class="bar"><span class="fill" style="width:${percent}%;background:${escapeHtml(color)}"></span></span>
+            </div>`;
+        });
+
+        if (free > 0) {
+            const percent = Math.round((free / (territoryState.tileCount || 1)) * 100);
+            bars.push(`
+            <div class="territory-entry unclaimed">
+                <span class="swatch"></span>
+                <span class="name">Unclaimed</span>
+                <span class="share">${percent}%</span>
+                <span class="bar"><span class="fill" style="width:${percent}%"></span></span>
+            </div>`);
+        }
+
+        leaderboardList.innerHTML = bars.join('');
     }
 
     respawnPlayer() {
@@ -1323,6 +1477,11 @@ class MultiplayerManager {
         if (multiplayerState.roundRef) {
             multiplayerState.roundRef.off();
         }
+        // Territory outlives us too: the ledges we painted stay painted for
+        // everybody still playing the round.
+        if (territoryState.ref) {
+            territoryState.ref.off();
+        }
         multiplayerState.playerMeta.clear();
         multiplayerState.remotePlayers.clear();
         multiplayerState.lastLeaderboardSignature = '';
@@ -1330,6 +1489,10 @@ class MultiplayerManager {
         multiplayerState.round = null;
         multiplayerState.roundPhaseSeen = null;
         multiplayerState.roundResult = null;
+        territoryState.owners.clear();
+        territoryState.colors.clear();
+        territoryState.shares = [];
+        territoryState.dirty = true;
         multiplayerState.connected = false;
     }
 }
@@ -2228,6 +2391,10 @@ class Player {
         }
         if (hit.ground) {
             this.recordSafeGround(hit.ground);
+            // Every frame you are stood on something, not only the frame you
+            // land: walking from one ledge onto the next takes the second one
+            // too. claimGround short-circuits on ledges already yours.
+            claimGround(hit.ground);
         }
 
         // Keep player in world bounds
@@ -4562,6 +4729,35 @@ class Platform {
         }
 
         ctx.restore();
+
+        this.drawOwner(screenX, screenY);
+    }
+
+    /**
+     * Paints a captured ledge in its owner's colour. A wash rather than a fill,
+     * so the brick or the planks still read through it and the level does not
+     * turn into a bar chart, plus a solid bar along the standing surface -
+     * which is the edge you actually aim at from across a gap.
+     */
+    drawOwner(screenX, screenY) {
+        const palette = territoryPalette(territoryOwnerOf(this));
+        if (!palette) return;
+
+        ctx.save();
+
+        ctx.globalAlpha = 0.34;
+        ctx.fillStyle = palette.shirt;
+        ctx.fillRect(screenX, screenY, this.width, this.height);
+
+        // The lip, at full strength. Read from a distance this is the whole
+        // signal: whose ledge is that one over there.
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = palette.shirt;
+        ctx.fillRect(screenX, screenY - 3, this.width, 4);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+        ctx.fillRect(screenX, screenY - 3, this.width, 1);
+
+        ctx.restore();
     }
 
     drawGround(screenX, screenY) {
@@ -5577,6 +5773,12 @@ function initLevel() {
     // the world we are already standing in does not rebuild it underneath us.
     gameState.roundIndexBuilt = multiplayerState.round ? multiplayerState.round.index : null;
 
+    // Number the ledges for territory. The level is built from data in a fixed
+    // order and without a single Math.random, so this index is the same on
+    // every client - which is what lets a tile be identified across the network
+    // by nothing more than its position in this array.
+    indexTerritory();
+
     updateCamera(true);
     updateHUD();
 }
@@ -5636,6 +5838,7 @@ function cacheHudElements() {
     // The clock's caption changes with the mode - "Time" on a level timer,
     // "Round" or "Next" on the shared multiplayer clock.
     hud.timeLabel = document.getElementById('time-label');
+    hud.mode = document.getElementById('round-mode');
 }
 cacheHudElements();
 
@@ -5685,6 +5888,14 @@ function updateHUD() {
     if (hud.time) {
         hud.time.parentElement.classList.toggle('urgent', updateClockDisplay());
     }
+    if (hud.mode) {
+        // Only shown when it is not the default game, so the HUD does not carry
+        // a chip saying "Score attack" through every ordinary round.
+        const territory = isTerritoryRound();
+        hud.mode.parentElement.classList.toggle('hidden', !territory);
+        if (territory) hud.mode.textContent = `Territory ${Math.round(myTerritoryShare() * 100)}%`;
+    }
+
     if (hud.combo) {
         const active = player && player.combo > 1;
         hud.combo.parentElement.classList.toggle('hidden', !active);
@@ -5823,6 +6034,203 @@ function roundView(now) {
     return { phase: ROUND_PHASE.EXPIRED, index: round.index, remainingMs: 0 };
 }
 
+// ---------------------------------------------------------------------------
+//  TERRITORY
+// ---------------------------------------------------------------------------
+
+/**
+ * Numbers every ledge in the level. The tile id is simply the platform's
+ * position in the array, which works as a network identity only because levels
+ * are built from data in a fixed order with no randomness anywhere in the
+ * layout - so every client numbers them identically without agreeing on
+ * anything first.
+ *
+ * The ground is never capturable. See the note on TERRITORY.
+ */
+function indexTerritory() {
+    let count = 0;
+    for (let i = 0; i < platforms.length; i++) {
+        const platform = platforms[i];
+        platform.tileId = i;
+        platform.capturable = platform.variant !== 'ground';
+        if (platform.capturable) count++;
+    }
+    territoryState.tileCount = count;
+    territoryState.dirty = true;
+}
+
+function tileKey(tileId) {
+    return `tile_${tileId}`;
+}
+
+function tileIdFromKey(key) {
+    const id = Number.parseInt(String(key).replace('tile_', ''), 10);
+    return Number.isInteger(id) ? id : null;
+}
+
+// The palette to paint a tile in. Remembered per uid rather than looked up from
+// the live player list, so a player who quits mid-round leaves their colour on
+// the board rather than having their ledges turn grey.
+function territoryPalette(uid) {
+    if (!uid) return null;
+    if (uid === multiplayerState.playerId) return multiplayerState.playerColor || PLAYER_COLORS[0];
+
+    const remembered = territoryState.colors.get(uid);
+    if (remembered) return remembered;
+
+    const live = multiplayerState.remotePlayers.get(uid);
+    return (live && live.color) || null;
+}
+
+function territoryOwnerOf(platform) {
+    if (!platform || !platform.capturable) return null;
+    return territoryState.owners.get(platform.tileId) || null;
+}
+
+/**
+ * How the map is split up, best share first. Recomputed only when ownership
+ * actually changes - this is read every frame by the HUD, and counting tiles
+ * sixty times a second to produce the same answer is waste.
+ */
+function territoryShares() {
+    if (!territoryState.dirty) return territoryState.shares;
+    territoryState.dirty = false;
+
+    const counts = new Map();
+    territoryState.owners.forEach((uid, tileId) => {
+        // Ownership can outlive a rebuild by a few frames, so ignore anything
+        // that is not a tile in the level currently standing.
+        const platform = platforms[tileId];
+        if (!platform || !platform.capturable) return;
+        counts.set(uid, (counts.get(uid) || 0) + 1);
+    });
+
+    const total = territoryState.tileCount || 1;
+    const shares = [];
+    counts.forEach((tiles, uid) => {
+        const isSelf = uid === multiplayerState.playerId;
+        const live = multiplayerState.remotePlayers.get(uid);
+        shares.push({
+            id: uid,
+            name: isSelf
+                ? (multiplayerState.playerName || 'You')
+                : (live ? live.name : 'Left'),
+            isSelf,
+            tiles,
+            share: tiles / total,
+            palette: territoryPalette(uid),
+        });
+    });
+
+    shares.sort((a, b) => b.tiles - a.tiles || String(a.name).localeCompare(String(b.name)));
+    territoryState.shares = shares;
+    return shares;
+}
+
+function myTerritoryShare() {
+    const mine = territoryShares().find(entry => entry.isSelf);
+    return mine ? mine.share : 0;
+}
+
+function myTerritoryTiles() {
+    const mine = territoryShares().find(entry => entry.isSelf);
+    return mine ? mine.tiles : 0;
+}
+
+function setTileOwner(tileId, uid) {
+    if (tileId === null) return;
+
+    const before = territoryState.owners.get(tileId) || null;
+    if (before === (uid || null)) return;
+
+    if (uid) territoryState.owners.set(tileId, uid);
+    else territoryState.owners.delete(tileId);
+    territoryState.dirty = true;
+
+    // The map changing is the only thing that moves a territory board, and
+    // player position updates - which drive the score board - say nothing about
+    // it. The board's own signature check stops this rebuilding the DOM when
+    // the standings have not actually moved.
+    if (multiplayerState.connected) multiplayer.updateLeaderboard();
+}
+
+/**
+ * Take the ledge under your feet. Called every frame the player is standing on
+ * something, not just on the landing frame, so walking from one ledge to the
+ * next takes the second one too - "last touched" means touched, not landed on.
+ * It short-circuits on tiles we already hold, which is what keeps standing
+ * still from being a write every frame.
+ */
+function claimGround(surface) {
+    if (!surface || !surface.capturable) return;
+    if (!multiplayerState.connected || !isTerritoryRound()) return;
+    if (roundIsSettled()) return;
+    if (!player || player.outOfLives || player.dying) return;
+
+    const held = territoryState.owners.get(surface.tileId);
+    if (held === multiplayerState.playerId) return;
+
+    // Taking a ledge off somebody is worth more than colouring in a loose one.
+    if (held) {
+        gameState.score += TERRITORY.STEAL_POINTS;
+        createFloatingText(
+            surface.x + surface.width / 2,
+            surface.y - 18,
+            `+${TERRITORY.STEAL_POINTS}`,
+            '#FFFFFF',
+            16
+        );
+    }
+
+    // Applied locally first: the paint should land under your feet on the frame
+    // you touch it, not a round trip later.
+    setTileOwner(surface.tileId, multiplayerState.playerId);
+    createSparkle(surface.x + surface.width / 2, surface.y - 6, '#FFFFFF');
+    multiplayer.claimTile(surface.tileId);
+}
+
+/**
+ * Holding pays. Without this the whole game is one fast lap at the death -
+ * last touch wins, so whoever laps last takes everything and the previous two
+ * minutes were decoration. Paying per second held makes defending a corner of
+ * the map worth as much as sprinting round it, which is also what gives
+ * stomping somebody off their ledge a point.
+ */
+function payTerritoryHolders(now) {
+    if (now - territoryState.lastPaidAt < 1000) return;
+    territoryState.lastPaidAt = now;
+
+    const tiles = myTerritoryTiles();
+    if (!tiles) return;
+
+    gameState.score += tiles * TERRITORY.HOLD_POINTS_PER_TILE;
+}
+
+/**
+ * Which game a round counter plays. Derived rather than stored: same counter,
+ * same answer on every client, with no field to validate or keep in step.
+ *
+ * The lap is folded in because there is an even number of worlds. A plain
+ * `counter % 2` would pin each world to one game forever - Green Hills score
+ * attack, Cobalt Coast territory, for all eternity - so the shift makes every
+ * world alternate between the two as the campaign comes round again.
+ */
+function roundMode(counter) {
+    const safe = Math.max(0, Math.floor(counter || 0));
+    const lapShift = Math.floor(safe / LEVELS.length);
+    return (safe + lapShift) % 2 === 0 ? ROUND_MODES.SCORE : ROUND_MODES.TERRITORY;
+}
+
+// The game being played right now. Single player is never a territory round.
+function currentRoundMode() {
+    if (!multiplayerState.connected || !multiplayerState.round) return ROUND_MODES.SCORE;
+    return roundMode(multiplayerState.round.index);
+}
+
+function isTerritoryRound() {
+    return currentRoundMode() === ROUND_MODES.TERRITORY;
+}
+
 // True once the whistle has blown and the world is waiting on the next one.
 function roundIsSettled() {
     const view = roundView();
@@ -5868,14 +6276,35 @@ function roundStandings() {
  * intermission would be a death you were given no way to avoid.
  */
 function settleRound() {
-    const standings = roundStandings();
+    const territory = isTerritoryRound();
+    const standings = territory ? territoryShares() : roundStandings();
     multiplayerState.roundResult = standings;
 
     const winner = standings[0];
+
+    // A territory round is won on the map, not on the scoreboard - but the
+    // scoreboard is the one currency the session and the all-time table share,
+    // so the final share is paid out into it.
+    if (territory) {
+        const mine = standings.find(entry => entry.isSelf);
+        if (mine) {
+            const bonus = Math.round(mine.share * TERRITORY.WIN_BONUS);
+            if (bonus > 0) {
+                gameState.score += bonus;
+                createFloatingText(
+                    player.x + player.width / 2, player.y - 30,
+                    `+${bonus}`, '#FFD700', 24
+                );
+            }
+        }
+    }
+
     // A visible separator, not spaces: the banner is HTML, so runs of
     // whitespace collapse and the places run into one another.
     const podium = standings.slice(0, 3)
-        .map((entry, i) => `${i + 1}. ${entry.name} ${entry.score}`)
+        .map((entry, i) => territory
+            ? `${i + 1}. ${entry.name} ${Math.round(entry.share * 100)}%`
+            : `${i + 1}. ${entry.name} ${entry.score}`)
         .join('  ·  ');
 
     if (winner && winner.isSelf && standings.length > 1) {
@@ -5904,6 +6333,14 @@ function onRoundStarted(previous) {
     multiplayerState.roundPhaseSeen = ROUND_PHASE.ACTIVE;
     multiplayerState.roundResult = null;
 
+    // Territory belongs to the world it was painted on. The spawn master clears
+    // the shared copy; this is the local one, cleared straight away so the new
+    // world does not open wearing the last one's colours for a second.
+    territoryState.owners.clear();
+    territoryState.shares = [];
+    territoryState.dirty = true;
+    territoryState.lastPaidAt = multiplayer.serverNow();
+
     if (!gameState.running || !multiplayerState.connected) return;
 
     // A round boundary is an amnesty: anyone who ran out of lives is back in
@@ -5924,13 +6361,22 @@ function onRoundStarted(previous) {
     // here rather than at the whistle - the object it was set on is gone.
     if (player) player.setInvulnerable(true, 2500);
 
+    // The two boards share a panel, and a round can swap which one is showing.
+    // Position updates would get round to it, but only once somebody moves.
+    multiplayerState.lastLeaderboardSignature = '';
+    multiplayer.updateLeaderboard();
+
     const plan = levelPlan();
     const label = previous
         ? `Round ${multiplayerState.round.index + 1}  ${plan.design.name}`
         : plan.design.name;
     // Not the level's own blurb: those tell a solo player to reach the flag,
-    // and there is no flag here. The round is the objective.
-    showBanner(label, `${formatClock(multiplayerState.round.duration)} - highest score takes it`, 2000);
+    // and there is no flag here. The round is the objective, so it says which
+    // round this is.
+    const clock = formatClock(multiplayerState.round.duration);
+    showBanner(label, isTerritoryRound()
+        ? `Territory - ${clock} - paint the ledges`
+        : `Score attack - ${clock} - highest score takes it`, 2200);
     music.start();
 }
 
@@ -5945,6 +6391,10 @@ function updateRound() {
     if (view.phase !== multiplayerState.roundPhaseSeen) {
         if (view.phase === ROUND_PHASE.INTERMISSION) settleRound();
         multiplayerState.roundPhaseSeen = view.phase;
+    }
+
+    if (view.phase === ROUND_PHASE.ACTIVE && isTerritoryRound()) {
+        payTerritoryHolders(multiplayer.serverNow());
     }
 
     if (view.phase !== ROUND_PHASE.EXPIRED || !multiplayerState.isSpawnMaster) return;

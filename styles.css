@@ -675,6 +675,80 @@ body.menu-open .rotate-hint {
     margin-left: 10px;
 }
 
+/* Territory board: one row per player, with the share as a bar rather than a
+   number to read. The bar is what makes a close round look close. */
+.territory-entry {
+    display: grid;
+    grid-template-columns: 12px 1fr auto;
+    grid-template-areas:
+        "swatch name share"
+        "bar    bar  bar";
+    align-items: center;
+    gap: 4px 8px;
+    color: white;
+    font-size: 14px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.territory-entry.you {
+    background: rgba(255, 215, 0, 0.18);
+    border: 1px solid rgba(255, 215, 0, 0.4);
+}
+
+.territory-entry .swatch {
+    grid-area: swatch;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.25);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.territory-entry .name {
+    grid-area: name;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.territory-entry .share {
+    grid-area: share;
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;
+}
+
+.territory-entry .bar {
+    grid-area: bar;
+    display: block;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+
+.territory-entry .bar .fill {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.3);
+    transition: width 0.25s ease-out;
+}
+
+.territory-entry.unclaimed {
+    opacity: 0.6;
+}
+
+/* The HUD chip naming the game, shown only on territory rounds. */
+.hud-item.mode {
+    background: rgba(80, 40, 140, 0.55);
+    border-color: rgba(190, 150, 255, 0.6);
+    color: #E6D6FF;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
 @media (max-width: 768px) {
     .leaderboard {
         right: 5px;

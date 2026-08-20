@@ -120,6 +120,8 @@ matters here — it is what other players see.
 
 Multiplayer is played in **rounds**. Everyone shares one clock: two and a half
 minutes in a world, then the standings are settled, then the next world opens.
+Rounds alternate between two games — score attack and territory — described
+below.
 The six campaign levels come round in order, so a session moves the whole party
 through the hills, the coast, the caverns, the sky, the ice and the castle, and
 then round again — the HUD counts the rounds, so round 7 is the hills a second
@@ -145,6 +147,53 @@ a reason to stay for the next one.
   starts the next one from zero.
 - **A round boundary is an amnesty.** Anyone who ran out of lives is back in for
   the new world instead of watching it from the out-of-lives screen.
+
+### Territory
+
+Rounds alternate between two games, and which one you get is worked out from the
+round counter rather than stored — same counter, same answer on every client,
+with no field to keep in step. There is no lobby to pick and nothing to vote on:
+the party plays whatever the round says, which is the same reason the worlds
+rotate. Because there is an even number of worlds, the lap is folded into the
+sum as well; otherwise Green Hills would be score attack for all eternity.
+
+**Score attack** is the game as it was: coins, stomps, and the leaderboard.
+
+**Territory** is the ledges. Every ledge you can stand on belongs to whoever
+touched it last, painted in their colour, and the board on the right turns into
+a live percentage of the map.
+
+- **The ground is not capturable, on purpose.** The ground segments are 700–900px
+  wide against 160–200px ledges, so counting them would make jogging along the
+  floor the whole game and the platforming irrelevant. Leaving the floor neutral
+  is what pushes everybody up into the air, which is where the contest is.
+- **Touched, not landed on.** The claim runs on every frame you are stood on
+  something, so walking from one ledge onto the next takes the second one too.
+  It short-circuits on ledges already yours, so standing still is not a write
+  every frame — a capture is written only when a ledge actually changes hands.
+- **Holding pays**, one point per ledge per second. Without that the whole game
+  is one fast lap at the death: last touch wins, so whoever laps last takes
+  everything and the previous two minutes were decoration. Paying for held
+  ground makes defending a corner of the map worth as much as sprinting round
+  it — and gives stomping somebody off their ledge a point, which is the first
+  time PvP has had one.
+- **Taking a ledge off somebody** scores; colouring in a loose one does not.
+- **At the whistle** the round is settled on share of the map, and your final
+  share is paid into your score, which is the one currency the session and the
+  all-time table share.
+- A player who quits mid-round **leaves their colour on the board** rather than
+  having their ledges turn grey.
+
+A tile is identified across the network by nothing more than its index in the
+level's platform list. That works only because levels are built from data in a
+fixed order with no randomness anywhere in the layout, so every client numbers
+the ledges identically without agreeing on anything first — and `tests.html`
+rebuilds every level in the campaign twice and compares the numbering, so the
+day someone reaches for `Math.random` in a layout, that is the test that fails.
+
+Unlike a coin, a capture is not a transaction and should not be: last write wins
+is exactly what taking a ledge means, where two players banking the same coin is
+a bug.
 
 Every client derives all of this — which world, how long is left, whether we are
 playing or reading the board — from a single shared timestamp, rather than
@@ -208,6 +257,12 @@ names cannot contain a slash. The reasoning therefore lives here:
   world, and a stale client cannot clobber the round everybody else has moved
   on to. `duration` is bounded at both ends so a bad write cannot leave the
   party staring at a twelve-hour countdown; the client clamps it again on read.
+- **`territory/$tile`** — who owns which ledge. `owner` is validated as
+  `auth.uid`, so the rule enforces the mechanic: you can only ever claim a ledge
+  *for yourself*, never assign one to somebody else. Clearing a tile is allowed
+  because that is how the map is wiped between worlds — and clearing somebody's
+  ledge is not an attack the game does not already permit, since taking it is
+  the point.
 - **`hits/$victim`** — a per-player inbox. You read only your own; anyone may
   post a claim into yours stamped with their own uid, and your client decides
   whether to accept it. Only you can clear your inbox.
@@ -281,14 +336,14 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 131 checks covering
+Open `tests.html` in a browser to run the test suite — 145 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, block and power-up behaviour, the death and respawn
 sequence, enemy behaviour at ledges, enemy population limits, fair spawning,
 hitbox fidelity against the rendered sprite, enemy artwork (the turtle's head
 and neck are scanned for in the rendered frame), power-up safety, moving
-platforms, springs and hazards, the multiplayer round clock, and shadow
-casting, alongside DOM and configuration checks.
+platforms, springs and hazards, the multiplayer round clock, territory
+capture, and shadow casting, alongside DOM and configuration checks.
 
 The round suite is worth a word on how it is written. Everything the round
 system decides is a pure function of one timestamp — which world, how much time

@@ -1976,6 +1976,357 @@
             assert(typeof multiplayer.ensureRound === 'function', 'The first client needs a way to open round zero');
         });
 
+        // Test Suite: Territory
+        const territoryTests = new TestRunner('Territory');
+
+        // Territory reads a lot of shared state. Every test here puts back what
+        // it borrowed, so the suite can run in any order.
+        function withTerritory(fn) {
+            const saved = {
+                owners: new Map(territoryState.owners),
+                colors: new Map(territoryState.colors),
+                tileCount: territoryState.tileCount,
+                shares: territoryState.shares,
+                dirty: territoryState.dirty,
+                connected: multiplayerState.connected,
+                round: multiplayerState.round,
+                id: multiplayerState.playerId,
+                name: multiplayerState.playerName,
+                color: multiplayerState.playerColor,
+                remote: multiplayerState.remotePlayers,
+                score: gameState.score,
+            };
+            try {
+                return fn();
+            } finally {
+                territoryState.owners = saved.owners;
+                territoryState.colors = saved.colors;
+                territoryState.tileCount = saved.tileCount;
+                territoryState.shares = saved.shares;
+                territoryState.dirty = saved.dirty;
+                multiplayerState.connected = saved.connected;
+                multiplayerState.round = saved.round;
+                multiplayerState.playerId = saved.id;
+                multiplayerState.playerName = saved.name;
+                multiplayerState.playerColor = saved.color;
+                multiplayerState.remotePlayers = saved.remote;
+                gameState.score = saved.score;
+            }
+        }
+
+        // Opens a territory round with us in it, against the level currently built.
+        function enterTerritoryRound() {
+            let counter = 0;
+            while (roundMode(counter) !== ROUND_MODES.TERRITORY) counter++;
+            multiplayerState.connected = true;
+            multiplayerState.round = { index: counter, startedAt: Date.now(), duration: ROUND.DURATION_MS };
+            multiplayerState.playerId = 'uid-me';
+            multiplayerState.playerName = 'Me';
+            multiplayerState.playerColor = PLAYER_COLORS[0];
+            multiplayerState.remotePlayers = new Map();
+            territoryState.owners.clear();
+            territoryState.dirty = true;
+            return counter;
+        }
+
+        territoryTests.test('Rounds alternate between the two games', () => {
+            // Every round plays one of the two, and never something else.
+            for (let i = 0; i < LEVELS.length * 4; i++) {
+                const mode = roundMode(i);
+                assert(mode === ROUND_MODES.SCORE || mode === ROUND_MODES.TERRITORY,
+                    `Round ${i} produced mode ${mode}`);
+            }
+
+            // Consecutive rounds differ, so a session never plays the same game
+            // twice running.
+            for (let i = 0; i < LEVELS.length * 3; i++) {
+                if (Math.floor(i / LEVELS.length) === Math.floor((i + 1) / LEVELS.length)) {
+                    assert(roundMode(i) !== roundMode(i + 1),
+                        `Rounds ${i} and ${i + 1} play the same game`);
+                }
+            }
+        });
+
+        territoryTests.test('A world is not stuck with the same game every lap', () => {
+            // There is an even number of worlds, so a plain counter % 2 would
+            // pin each world to one game forever. The lap shift is what stops
+            // that, and this is the check that would catch it being dropped.
+            for (let world = 0; world < LEVELS.length; world++) {
+                const lap1 = roundMode(world);
+                const lap2 = roundMode(world + LEVELS.length);
+                assert(lap1 !== lap2,
+                    `${LEVELS[world].name} plays ${lap1} on both lap 1 and lap 2`);
+            }
+        });
+
+        territoryTests.test('Single player is never a territory round', () => {
+            withTerritory(() => {
+                multiplayerState.connected = false;
+                multiplayerState.round = { index: 1, startedAt: Date.now(), duration: ROUND.DURATION_MS };
+                assertEqual(currentRoundMode(), ROUND_MODES.SCORE, 'Solo play is always score attack');
+                assertEqual(isTerritoryRound(), false, 'Solo play is never a territory round');
+            });
+        });
+
+        territoryTests.test('Every ledge is numbered and the ground is not capturable', () => {
+            withTerritory(() => {
+                initLevel();
+
+                assert(platforms.length > 0, 'No platforms were built');
+                platforms.forEach((platform, i) => {
+                    assertEqual(platform.tileId, i, 'A tile id should be its index in platforms');
+                });
+
+                const ground = platforms.filter(p => p.variant === 'ground');
+                assert(ground.length > 0, 'The level has no ground to check');
+                assert(ground.every(p => !p.capturable), 'Ground must never be capturable');
+
+                const ledges = platforms.filter(p => p.variant !== 'ground');
+                assert(ledges.length > 0, 'The level has no ledges to capture');
+                assert(ledges.every(p => p.capturable), 'Every ledge should be capturable');
+                assertEqual(territoryState.tileCount, ledges.length, 'The tile count should be the ledge count');
+            });
+        });
+
+        territoryTests.test('Tile ids are the same every time a level is built', () => {
+            // The whole scheme rests on this: a tile is identified across the
+            // network by nothing but its index, which only works because the
+            // level is built from data in a fixed order with no randomness. If
+            // layout ever picks up a Math.random, this is the test that fails.
+            withTerritory(() => {
+                const fingerprint = () => {
+                    initLevel();
+                    return platforms.map(p => `${p.tileId}:${p.variant}:${p.capturable}:${p.homeX === undefined ? p.x : p.homeX}:${p.homeY === undefined ? p.y : p.homeY}:${p.width}`).join('|');
+                };
+
+                const savedLevel = gameState.level;
+                try {
+                    for (let level = 1; level <= LEVELS.length; level++) {
+                        gameState.level = level;
+                        const first = fingerprint();
+                        const second = fingerprint();
+                        assertEqual(second, first, `Level ${level} numbers its tiles differently on a rebuild`);
+                    }
+                } finally {
+                    gameState.level = savedLevel;
+                    initLevel();
+                }
+            });
+        });
+
+        territoryTests.test('Tile keys survive the round trip', () => {
+            assertEqual(tileIdFromKey(tileKey(0)), 0, 'Tile 0 should round-trip');
+            assertEqual(tileIdFromKey(tileKey(37)), 37, 'Tile 37 should round-trip');
+            assertEqual(tileIdFromKey('tile_notanumber'), null, 'A bad key resolves to null');
+        });
+
+        territoryTests.test('Standing on a ledge takes it, standing on the ground takes nothing', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                const writes = [];
+                multiplayer.claimTile = async (id) => { writes.push(id); };
+
+                try {
+                    const ledge = platforms.find(p => p.capturable);
+                    const ground = platforms.find(p => p.variant === 'ground');
+
+                    claimGround(ledge);
+                    assertEqual(territoryState.owners.get(ledge.tileId), 'uid-me', 'A ledge should be taken');
+                    assertEqual(writes.length, 1, 'Taking a ledge should write once');
+
+                    // Already ours - no work, and above all no second write.
+                    claimGround(ledge);
+                    assertEqual(writes.length, 1, 'Standing on a ledge you own must not write again');
+
+                    claimGround(ground);
+                    assertEqual(territoryState.owners.has(ground.tileId), false, 'The ground cannot be taken');
+                    assertEqual(writes.length, 1, 'The ground must not produce a write');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
+        territoryTests.test('Walking from one ledge to the next takes both', () => {
+            // "Last touched" means touched, not landed on: the claim runs on
+            // every grounded frame, so crossing from one ledge onto another
+            // without leaving the ground takes the second one too.
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                multiplayer.claimTile = async () => {};
+
+                try {
+                    const ledges = platforms.filter(p => p.capturable).slice(0, 2);
+                    assert(ledges.length === 2, 'Need two ledges for this test');
+                    ledges.forEach(l => claimGround(l));
+                    assertEqual(myTerritoryTiles(), 2, 'Both ledges should be ours');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
+        territoryTests.test('Taking a ledge off somebody scores', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                multiplayer.claimTile = async () => {};
+
+                try {
+                    const ledge = platforms.find(p => p.capturable);
+
+                    // A loose ledge is worth the colour, not the points.
+                    gameState.score = 0;
+                    claimGround(ledge);
+                    assertEqual(gameState.score, 0, 'Colouring in a free ledge should not score');
+
+                    // One somebody else holds is worth taking.
+                    setTileOwner(ledge.tileId, 'uid-rival');
+                    gameState.score = 0;
+                    claimGround(ledge);
+                    assertEqual(gameState.score, TERRITORY.STEAL_POINTS, 'Taking a held ledge should score');
+                    assertEqual(territoryState.owners.get(ledge.tileId), 'uid-me', 'And it should change hands');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
+        territoryTests.test('Holding pays once a second, per ledge', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                multiplayer.claimTile = async () => {};
+
+                try {
+                    platforms.filter(p => p.capturable).slice(0, 3).forEach(l => claimGround(l));
+                    assertEqual(myTerritoryTiles(), 3, 'Should be holding three ledges');
+
+                    let now = 1000000;
+                    gameState.score = 0;
+                    territoryState.lastPaidAt = now;
+
+                    // Part of a second pays nothing...
+                    payTerritoryHolders(now + 400);
+                    assertEqual(gameState.score, 0, 'Half a second should not pay');
+
+                    // ...a full second pays for every ledge held.
+                    payTerritoryHolders(now + 1000);
+                    assertEqual(gameState.score, 3 * TERRITORY.HOLD_POINTS_PER_TILE, 'A second should pay per ledge');
+
+                    // And it pays once, not once per frame.
+                    payTerritoryHolders(now + 1100);
+                    payTerritoryHolders(now + 1200);
+                    assertEqual(gameState.score, 3 * TERRITORY.HOLD_POINTS_PER_TILE, 'Holding must not pay every frame');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
+        territoryTests.test('Shares add up and are ordered', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const ledges = platforms.filter(p => p.capturable);
+                assert(ledges.length >= 6, 'Need at least six ledges for this test');
+
+                multiplayerState.remotePlayers = new Map([
+                    ['uid-b', { name: 'Bea', score: 0, color: PLAYER_COLORS[1] }],
+                ]);
+
+                ledges.slice(0, 2).forEach(l => setTileOwner(l.tileId, 'uid-me'));
+                ledges.slice(2, 6).forEach(l => setTileOwner(l.tileId, 'uid-b'));
+
+                const shares = territoryShares();
+                assertEqual(shares.length, 2, 'Two players hold ground');
+                assertEqual(shares[0].name, 'Bea', 'The bigger share leads');
+                assertEqual(shares[0].tiles, 4, 'Bea holds four');
+                assertEqual(shares[1].tiles, 2, 'We hold two');
+                assert(shares[1].isSelf, 'Our own row is flagged');
+
+                const total = shares.reduce((sum, s) => sum + s.share, 0);
+                assert(total <= 1.0001, `Shares should never exceed the whole map, got ${total}`);
+                assertEqual(Math.round(shares[0].share * ledges.length), 4, 'A share is its ledge count over the map');
+            });
+        });
+
+        territoryTests.test('Ownership left over from a bigger level is ignored', () => {
+            // Levels are different sizes, and a stale claim can outlive a
+            // rebuild by a few frames. A tile id past the end of the level
+            // standing must not count towards anybody's share.
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                setTileOwner(platforms.length + 500, 'uid-me');
+                assertEqual(myTerritoryTiles(), 0, 'A tile that is not in this level should not count');
+
+                const ground = platforms.find(p => p.variant === 'ground');
+                setTileOwner(ground.tileId, 'uid-me');
+                assertEqual(myTerritoryTiles(), 0, 'A ground tile should not count even if claimed');
+            });
+        });
+
+        territoryTests.test('A ledge keeps its colour after its owner leaves', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                // Bea is here, and painted.
+                territoryState.colors.set('uid-b', PLAYER_COLORS[1]);
+                multiplayerState.remotePlayers = new Map([
+                    ['uid-b', { name: 'Bea', score: 0, color: PLAYER_COLORS[1] }],
+                ]);
+                const ledge = platforms.find(p => p.capturable);
+                setTileOwner(ledge.tileId, 'uid-b');
+                assertEqual(territoryPalette('uid-b'), PLAYER_COLORS[1], 'Bea paints in her own colour');
+
+                // Bea quits. Her ledges stay hers, and stay her colour.
+                multiplayerState.remotePlayers = new Map();
+                assertEqual(territoryPalette('uid-b'), PLAYER_COLORS[1], 'A departed player keeps their colour');
+                assertEqual(territoryOwnerOf(ledge), 'uid-b', 'And keeps their ledges');
+            });
+        });
+
+        territoryTests.test('Nothing is claimed once the round is settled', () => {
+            withTerritory(() => {
+                initLevel();
+                enterTerritoryRound();
+
+                const realClaim = multiplayer.claimTile;
+                const writes = [];
+                multiplayer.claimTile = async (id) => { writes.push(id); };
+
+                try {
+                    // Wind the clock past the whistle: the world is frozen and
+                    // the standings are up, so the map is closed.
+                    multiplayerState.round = {
+                        index: multiplayerState.round.index,
+                        startedAt: Date.now() - (ROUND.DURATION_MS + 1000),
+                        duration: ROUND.DURATION_MS,
+                    };
+                    assert(roundIsSettled(), 'The round should be settled for this test');
+
+                    claimGround(platforms.find(p => p.capturable));
+                    assertEqual(writes.length, 0, 'A settled round must not accept claims');
+                } finally {
+                    multiplayer.claimTile = realClaim;
+                }
+            });
+        });
+
         // Run all tests
         async function runAllTests() {
             const suites = [
@@ -2001,7 +2352,8 @@
                 rideTests,
                 pwaTests,
                 multiplayerTests,
-                roundTests
+                roundTests,
+                territoryTests
             ];
 
             const allResults = [];

@@ -70,6 +70,19 @@
       "$other": { ".validate": false }
     },
 
+    "territory": {
+      ".read": "auth != null",
+
+      "$tile": {
+        ".write": "auth != null",
+        ".validate": "!newData.exists() || newData.hasChildren(['owner', 'at'])",
+
+        "owner": { ".validate": "newData.val() === auth.uid" },
+        "at": { ".validate": "newData.isNumber() && newData.val() <= now + 5000" },
+        "$other": { ".validate": false }
+      }
+    },
+
     "hits": {
       "$victim": {
         ".read": "auth != null && auth.uid === $victim",
