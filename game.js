@@ -273,6 +273,32 @@ function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
+// ---------------------------------------------------------------------------
+//  MULTIPLAYER ROUNDS
+// ---------------------------------------------------------------------------
+// Multiplayer used to be one level on an infinite loop: no flag is built when
+// connected, so nothing could ever end a session. A round gives it a shape -
+// everyone plays the same world against the same clock, the standings are
+// settled, and the next world starts. All of it derives from a single shared
+// timestamp rather than a synchronised state machine, so a client that joins
+// halfway through lands on the right world with the right time left on it.
+const ROUND = {
+    DURATION_MS: 150000,        // 2:30 of play per world
+    INTERMISSION_MS: 12000,     // Standings, then the next world
+    // A duration read off the database is clamped into this range before it is
+    // trusted. The rules bound it too; this is the client refusing to render a
+    // twelve-hour countdown if anything ever slips past them.
+    MIN_DURATION_MS: 30000,
+    MAX_DURATION_MS: 600000,
+    URGENT_MS: 30000,           // When the clock starts shouting
+};
+
+const ROUND_PHASE = {
+    ACTIVE: 'active',           // Playing, clock running
+    INTERMISSION: 'intermission', // Round settled, next world on the way
+    EXPIRED: 'expired',         // Intermission is over and nobody has advanced yet
+};
+
 // Multiplayer State
 const multiplayerState = {
     playerId: null,
@@ -304,6 +330,19 @@ const multiplayerState = {
     serverTimeOffset: 0,
     lastLeaderboardSignature: '',
     lastSubmittedAllTimeScore: 0,
+    roundRef: null,
+    // { index, startedAt, duration } in server time, or null before the first
+    // snapshot arrives. The index is a monotonic round counter, not a level
+    // index - which world it means is index % LEVELS.length.
+    round: null,
+    // The phase this client last acted on, so the transition into the
+    // intermission fires exactly once however often tick() looks at the clock.
+    roundPhaseSeen: null,
+    // Standings frozen at the whistle, so the board cannot move while it is
+    // being read.
+    roundResult: null,
+    // Rate-limits the spawn master's retries when a round advance fails.
+    lastAdvanceAttempt: 0,
     // Track last synced values to avoid redundant updates
     lastSyncedState: {
         x: null,
@@ -378,6 +417,7 @@ class MultiplayerManager {
             multiplayerState.enemiesRef = this.db.ref('enemies');
             multiplayerState.portalRef = this.db.ref('portals');
             multiplayerState.hitsRef = this.db.ref('hits');
+            multiplayerState.roundRef = this.db.ref('round');
 
             // Initialize player data
             await multiplayerState.playerRef.set({
@@ -416,6 +456,10 @@ class MultiplayerManager {
 
             // Listen for incoming PvP hits
             this.listenForHits();
+
+            // Listen for the shared round clock. This also opens round zero if
+            // this client is the first into an empty session.
+            this.listenForRound();
 
             // Update leaderboard
             this.updateLeaderboard();
@@ -457,6 +501,124 @@ class MultiplayerManager {
     // them against.
     serverNow() {
         return Date.now() + multiplayerState.serverTimeOffset;
+    }
+
+    // ---- Rounds -----------------------------------------------------------
+
+    // The round node is one small object that every client reads and only the
+    // spawn master writes. Everything else - which world we are on, how long
+    // is left, whether we are playing or reading the standings - is derived
+    // from it locally, so there is no per-tick traffic and no way for two
+    // clients to disagree about the clock beyond their offset from the server.
+    listenForRound() {
+        if (!multiplayerState.roundRef) return;
+
+        multiplayerState.roundRef.on('value', (snapshot) => {
+            const data = snapshot.val();
+
+            if (!data || typeof data.index !== 'number' || typeof data.startedAt !== 'number') {
+                multiplayerState.round = null;
+                // An empty node means nobody has started the session yet. Any
+                // client may open the first round; the transaction settles it.
+                this.ensureRound();
+                return;
+            }
+
+            const previous = multiplayerState.round;
+            multiplayerState.round = {
+                index: Math.max(0, Math.floor(data.index)),
+                startedAt: data.startedAt,
+                duration: clamp(
+                    typeof data.duration === 'number' ? data.duration : ROUND.DURATION_MS,
+                    ROUND.MIN_DURATION_MS,
+                    ROUND.MAX_DURATION_MS
+                ),
+            };
+
+            if (!previous || previous.index !== multiplayerState.round.index) {
+                onRoundStarted(previous);
+            }
+        });
+    }
+
+    // Opens round zero if the session has none. Guarded by a transaction, so
+    // several clients arriving at an empty database at once still produce one
+    // round rather than one each.
+    async ensureRound() {
+        if (!multiplayerState.roundRef || this.openingRound) return;
+        this.openingRound = true;
+
+        try {
+            await multiplayerState.roundRef.transaction((current) => {
+                if (current && typeof current.index === 'number') return undefined; // Someone got there first
+                return { index: 0, startedAt: this.serverNow(), duration: ROUND.DURATION_MS };
+            });
+        } catch (error) {
+            console.error('Failed to open the first round:', error);
+        } finally {
+            this.openingRound = false;
+        }
+    }
+
+    /**
+     * Moves the session on to the next world. Only the spawn master calls this,
+     * but the transaction is guarded on the index we are advancing *from*
+     * rather than trusting that: if the role changes hands during an
+     * intermission and both clients try, the second one reads an index that has
+     * already moved and aborts. Advancing is therefore idempotent, which is
+     * what stops a handover skipping a world.
+     */
+    async advanceRound(fromIndex) {
+        if (!multiplayerState.roundRef || this.advancingRound) return false;
+        this.advancingRound = true;
+
+        try {
+            const result = await multiplayerState.roundRef.transaction((current) => {
+                if (!current || current.index !== fromIndex) return undefined; // Already moved on
+                return { index: fromIndex + 1, startedAt: this.serverNow(), duration: ROUND.DURATION_MS };
+            });
+
+            if (result.committed) await this.clearSharedWorld();
+            return result.committed;
+        } catch (error) {
+            console.error('Failed to advance the round:', error);
+            return false;
+        } finally {
+            this.advancingRound = false;
+        }
+    }
+
+    /**
+     * Wipes the world state that belonged to the round just finished. Enemies
+     * are the important half: their coordinates were chosen for the old level,
+     * so carrying them over drops turtles into the walls of the new one.
+     * Clearing a coin claim marks that coin uncollected, which is exactly what
+     * a fresh world wants.
+     */
+    async clearSharedWorld() {
+        try {
+            const jobs = [];
+
+            // The enemies node is writable as a whole, so it goes in one call.
+            if (multiplayerState.enemiesRef) jobs.push(multiplayerState.enemiesRef.remove());
+
+            // Coin claims are not: the rules put .write on coins/$coin and
+            // nothing on the parent, so removing the node outright is denied.
+            // Nulling each claim in one multi-path update is checked per child
+            // instead, and clearing a claim is something the rules already
+            // allow anybody to do once the coin is up for respawn.
+            if (multiplayerState.coinsRef) {
+                jobs.push(multiplayerState.coinsRef.once('value').then((snapshot) => {
+                    const cleared = {};
+                    snapshot.forEach((child) => { cleared[child.key] = null; });
+                    if (Object.keys(cleared).length) return multiplayerState.coinsRef.update(cleared);
+                }));
+            }
+
+            await Promise.all(jobs);
+        } catch (error) {
+            console.error('Failed to clear the world between rounds:', error);
+        }
     }
 
     listenForPlayers() {
@@ -1156,10 +1318,18 @@ class MultiplayerManager {
             multiplayerState.hitsRef.child(multiplayerState.playerId).off();
             multiplayerState.hitsRef.child(multiplayerState.playerId).remove();
         }
+        // The round node outlives us - it belongs to the session, not to this
+        // client - so it is unsubscribed rather than removed.
+        if (multiplayerState.roundRef) {
+            multiplayerState.roundRef.off();
+        }
         multiplayerState.playerMeta.clear();
         multiplayerState.remotePlayers.clear();
         multiplayerState.lastLeaderboardSignature = '';
         multiplayerState.isSpawnMaster = false;
+        multiplayerState.round = null;
+        multiplayerState.roundPhaseSeen = null;
+        multiplayerState.roundResult = null;
         multiplayerState.connected = false;
     }
 }
@@ -5226,7 +5396,16 @@ const LEVELS = [
  */
 function levelPlan(level = gameState.level) {
     if (multiplayerState.connected) {
-        return { design: LEVELS[0], index: 0, lap: 1, label: '1-1' };
+        // The round counter decides the world, so every client in the session
+        // is standing in the same one. Before the first snapshot lands there is
+        // nothing to go on, and the hills are as good a guess as any.
+        const spot = roundDesign(multiplayerState.round ? multiplayerState.round.index : 0);
+        return {
+            design: spot.design,
+            index: spot.index,
+            lap: spot.lap,
+            label: `${spot.lap}-${spot.index + 1}`,
+        };
     }
     const index = (level - 1) % LEVELS.length;
     const lap = Math.floor((level - 1) / LEVELS.length) + 1;
@@ -5394,6 +5573,10 @@ function initLevel() {
 
     buildCoins(design);
 
+    // Which round this level was built for, so a snapshot that only confirms
+    // the world we are already standing in does not rebuild it underneath us.
+    gameState.roundIndexBuilt = multiplayerState.round ? multiplayerState.round.index : null;
+
     updateCamera(true);
     updateHUD();
 }
@@ -5450,8 +5633,49 @@ function cacheHudElements() {
     ['score', 'coins', 'lives', 'level', 'time', 'combo'].forEach(id => {
         hud[id] = document.getElementById(id);
     });
+    // The clock's caption changes with the mode - "Time" on a level timer,
+    // "Round" or "Next" on the shared multiplayer clock.
+    hud.timeLabel = document.getElementById('time-label');
 }
 cacheHudElements();
+
+/**
+ * The clock in the HUD, and whether it should be shouting. Single player counts
+ * the level timer down in bare seconds. Multiplayer shows the shared round
+ * clock, and once the round is settled it counts down to the next world
+ * instead, so the wait is never dead air.
+ *
+ * Returns true when the reading is urgent enough to highlight.
+ */
+function updateClockDisplay() {
+    const setLabel = (text) => { if (hud.timeLabel) hud.timeLabel.textContent = text; };
+
+    if (!multiplayerState.connected) {
+        hud.time.textContent = Math.max(0, Math.ceil(gameState.time));
+        setLabel('Time');
+        return gameState.time <= 60;
+    }
+
+    const view = roundView();
+    if (!view) {
+        // Connected, but the first round snapshot has not arrived yet.
+        hud.time.textContent = '--';
+        setLabel('Round');
+        return false;
+    }
+
+    if (view.phase === ROUND_PHASE.ACTIVE) {
+        hud.time.textContent = formatClock(view.remainingMs);
+        setLabel('Round');
+        return view.remainingMs <= ROUND.URGENT_MS;
+    }
+
+    hud.time.textContent = view.phase === ROUND_PHASE.INTERMISSION
+        ? formatClock(view.remainingMs)
+        : '0:00';
+    setLabel('Next');
+    return false;
+}
 
 function updateHUD() {
     if (hud.score) hud.score.textContent = gameState.score;
@@ -5459,8 +5683,7 @@ function updateHUD() {
     if (hud.lives) hud.lives.textContent = Math.max(0, gameState.lives);
     if (hud.level) hud.level.textContent = gameState.worldLabel || worldLabel();
     if (hud.time) {
-        hud.time.textContent = multiplayerState.connected ? '--' : Math.max(0, Math.ceil(gameState.time));
-        hud.time.parentElement.classList.toggle('urgent', !multiplayerState.connected && gameState.time <= 60);
+        hud.time.parentElement.classList.toggle('urgent', updateClockDisplay());
     }
     if (hud.combo) {
         const active = player && player.combo > 1;
@@ -5549,6 +5772,192 @@ function timeUp() {
 }
 
 // ============================================================================
+//  MULTIPLAYER ROUND FLOW
+// ============================================================================
+
+/**
+ * Which world a round counter lands on, and which lap of the six it is. The
+ * counter only ever goes up, so round 7 is the hills again on lap 2.
+ */
+function roundDesign(counter) {
+    const safe = Math.max(0, Math.floor(counter || 0));
+    const index = safe % LEVELS.length;
+    return { design: LEVELS[index], index, lap: Math.floor(safe / LEVELS.length) + 1 };
+}
+
+/**
+ * Where the shared clock has got to. Every client works this out from the one
+ * timestamp in the round node, so nobody has to broadcast "the round ended" -
+ * and a client that joins halfway through gets the right world with the right
+ * time left on it without any catch-up traffic at all.
+ *
+ * Returns null until the first snapshot arrives.
+ */
+function roundView(now) {
+    const round = multiplayerState.round;
+    if (!round) return null;
+
+    const at = now === undefined ? multiplayer.serverNow() : now;
+    const elapsed = at - round.startedAt;
+
+    if (elapsed < round.duration) {
+        return {
+            phase: ROUND_PHASE.ACTIVE,
+            index: round.index,
+            // A startedAt in the future - a clock that has drifted since the
+            // offset was last read - would otherwise show more time left than
+            // the round has.
+            remainingMs: Math.min(round.duration, round.duration - elapsed),
+        };
+    }
+
+    const intoBreak = elapsed - round.duration;
+    if (intoBreak < ROUND.INTERMISSION_MS) {
+        return {
+            phase: ROUND_PHASE.INTERMISSION,
+            index: round.index,
+            remainingMs: ROUND.INTERMISSION_MS - intoBreak,
+        };
+    }
+
+    return { phase: ROUND_PHASE.EXPIRED, index: round.index, remainingMs: 0 };
+}
+
+// True once the whistle has blown and the world is waiting on the next one.
+function roundIsSettled() {
+    const view = roundView();
+    return !!view && view.phase !== ROUND_PHASE.ACTIVE;
+}
+
+// m:ss. The single-player clock counts bare seconds, but a round is minutes
+// long and "150" does not read as two and a half minutes at a glance.
+function formatClock(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Everyone in the session, ourselves included, best score first. Ties break on
+ * name so the board reads the same on every screen rather than falling out of
+ * whatever order the players arrived in.
+ */
+function roundStandings() {
+    const board = [{
+        id: multiplayerState.playerId,
+        name: multiplayerState.playerName || 'You',
+        score: gameState.score,
+        isSelf: true,
+    }];
+
+    multiplayerState.remotePlayers.forEach((data, id) => {
+        board.push({
+            id,
+            name: data.name || 'Player',
+            score: data.score || 0,
+            isSelf: false,
+        });
+    });
+
+    board.sort((a, b) => b.score - a.score || String(a.name).localeCompare(String(b.name)));
+    return board;
+}
+
+/**
+ * The whistle. Freezes the standings, says who took the world, and holds
+ * everyone safe while the board is up - a turtle wandering into you during the
+ * intermission would be a death you were given no way to avoid.
+ */
+function settleRound() {
+    const standings = roundStandings();
+    multiplayerState.roundResult = standings;
+
+    const winner = standings[0];
+    // A visible separator, not spaces: the banner is HTML, so runs of
+    // whitespace collapse and the places run into one another.
+    const podium = standings.slice(0, 3)
+        .map((entry, i) => `${i + 1}. ${entry.name} ${entry.score}`)
+        .join('  ·  ');
+
+    if (winner && winner.isSelf && standings.length > 1) {
+        sounds.levelComplete();
+        haptics.success();
+    }
+
+    const plan = levelPlan();
+    showBanner(
+        `${plan.design.name} - ${winner ? winner.name : 'nobody'} takes it`,
+        podium,
+        ROUND.INTERMISSION_MS
+    );
+
+    // tick() freezes the world for the duration, so there is nothing to
+    // protect the player from here - only a stride to tidy up, so the freeze
+    // frame is not caught mid-run.
+    if (player) player.velocityX = 0;
+}
+
+/**
+ * A new world has been opened by the spawn master. Everyone rebuilds against
+ * it - the round node is the only thing that decides which level is standing.
+ */
+function onRoundStarted(previous) {
+    multiplayerState.roundPhaseSeen = ROUND_PHASE.ACTIVE;
+    multiplayerState.roundResult = null;
+
+    if (!gameState.running || !multiplayerState.connected) return;
+
+    // A round boundary is an amnesty: anyone who ran out of lives is back in
+    // for the new world rather than watching it from the out-of-lives screen.
+    if (player && player.outOfLives) {
+        clearCountdowns();
+        setScreenVisible('out-of-lives-screen', false);
+        gameState.lives = Math.max(gameState.lives, 3);
+    }
+
+    // startGame() builds a level before the first snapshot can arrive, so the
+    // first round usually finds the right world already standing.
+    if (gameState.roundIndexBuilt !== multiplayerState.round.index) {
+        initLevel();
+    }
+
+    // initLevel() builds a fresh player, so the grace period has to be granted
+    // here rather than at the whistle - the object it was set on is gone.
+    if (player) player.setInvulnerable(true, 2500);
+
+    const plan = levelPlan();
+    const label = previous
+        ? `Round ${multiplayerState.round.index + 1}  ${plan.design.name}`
+        : plan.design.name;
+    // Not the level's own blurb: those tell a solo player to reach the flag,
+    // and there is no flag here. The round is the objective.
+    showBanner(label, `${formatClock(multiplayerState.round.duration)} - highest score takes it`, 2000);
+    music.start();
+}
+
+/**
+ * Drives the round clock forward once per tick. The phase is derived, not
+ * stored, so this only has to notice when it changes and act once.
+ */
+function updateRound() {
+    const view = roundView();
+    if (!view) return;
+
+    if (view.phase !== multiplayerState.roundPhaseSeen) {
+        if (view.phase === ROUND_PHASE.INTERMISSION) settleRound();
+        multiplayerState.roundPhaseSeen = view.phase;
+    }
+
+    if (view.phase !== ROUND_PHASE.EXPIRED || !multiplayerState.isSpawnMaster) return;
+
+    // Only the master opens the next world, and a failed write should not be
+    // retried sixty times a second while the network is down.
+    const now = Date.now();
+    if (now - (multiplayerState.lastAdvanceAttempt || 0) < 1000) return;
+    multiplayerState.lastAdvanceAttempt = now;
+    multiplayer.advanceRound(view.index);
+}
+
+// ============================================================================
 //  SIMULATION TICK
 // ============================================================================
 
@@ -5586,23 +5995,36 @@ function carryRiders() {
 function tick() {
     rebuildSolids();
 
+    // The round clock is read before anything moves, so the whistle takes
+    // effect on the same frame it blows rather than a frame late.
+    if (multiplayerState.connected) updateRound();
+
+    // Between rounds the whole world holds still while the standings are up.
+    // Locking the controls alone is not enough: a player left airborne over a
+    // pit when the whistle blew would fall into it, and a pit kills whatever
+    // your health and invulnerability say.
+    const roundBreak = multiplayerState.connected && roundIsSettled();
+
     // Moving platforms go first, and take their passengers with them, so the
     // player's own step below starts from a position that is already correct.
-    movers.forEach(mover => mover.update());
-    if (movers.length) carryRiders();
+    if (!roundBreak) {
+        movers.forEach(mover => mover.update());
+        if (movers.length) carryRiders();
+    }
 
     blocks.forEach(block => block.update());
-    if (!(player.dying && !multiplayerState.connected)) {
+    if (!(player.dying && !multiplayerState.connected) && !roundBreak) {
         portals.forEach(portal => portal.update());
     }
 
     // The player moves first so every collision below reads a current position.
-    player.update();
+    if (!roundBreak) player.update();
 
     // While the player is dying the level holds its breath, the way it does
     // in the games this is modelled on. Multiplayer keeps running because the
-    // world there belongs to everyone, not just to whoever just died.
-    const frozen = player.dying && !multiplayerState.connected;
+    // world there belongs to everyone, not just to whoever just died - except
+    // between rounds, when it belongs to nobody.
+    const frozen = (player.dying && !multiplayerState.connected) || roundBreak;
 
     if (!frozen) {
         enemies.forEach(enemy => enemy.update());

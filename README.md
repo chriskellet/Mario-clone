@@ -116,6 +116,46 @@ leaderboard, and can stomp each other. Pipes spawn enemies under a single
 elected spawn master so everyone sees the same world. Only the name field
 matters here — it is what other players see.
 
+### Rounds
+
+Multiplayer is played in **rounds**. Everyone shares one clock: two and a half
+minutes in a world, then the standings are settled, then the next world opens.
+The six campaign levels come round in order, so a session moves the whole party
+through the hills, the coast, the caverns, the sky, the ice and the castle, and
+then round again — the HUD counts the rounds, so round 7 is the hills a second
+time.
+
+There is no flagpole in multiplayer and there never was: the clock is the only
+ending a session has. Before rounds, that meant a multiplayer game had no
+ending at all — one level on an infinite loop, where the only thing the timer
+could do was kill you and reset itself. A round gives the session a shape, and
+a reason to stay for the next one.
+
+- **The clock** reads `Round 2:30` and counts down, turning urgent for the last
+  thirty seconds. Once the whistle blows it flips to `Next` and counts down the
+  twelve-second intermission instead, so the wait is never dead air.
+- **The standings** freeze at the whistle and go up on the banner, best score
+  first, with ties broken on name so the board reads identically on every
+  screen.
+- **The world holds still** for the intermission. Locking the controls would not
+  have been enough: a player left airborne over a pit when the whistle blew
+  would fall into it, and a pit is fatal whatever your health and invulnerability
+  say. Nothing moves, so nothing can take you while you are reading the board.
+- **Score carries** across rounds — a round decides who took that world, not who
+  starts the next one from zero.
+- **A round boundary is an amnesty.** Anyone who ran out of lives is back in for
+  the new world instead of watching it from the out-of-lives screen.
+
+Every client derives all of this — which world, how long is left, whether we are
+playing or reading the board — from a single shared timestamp, rather than
+anybody broadcasting "the round has ended". That is what lets somebody who joins
+ninety seconds in land in the right world with the right time left on the clock
+and no catch-up traffic at all. The spawn master is the only client that writes
+the round on, and the write is a transaction guarded on the round it is
+advancing *from*, so if the role changes hands mid-intermission the second
+client reads an index that has already moved and aborts. Advancing is therefore
+idempotent, which is what stops a handover skipping a world.
+
 Multiplayer can be unavailable in two ways, and they surface differently. If the
 Firebase SDK never loaded there is nothing to join, so the button is disabled on
 the menu with a note saying why. If the SDK loaded but sign-in or the rules
@@ -161,6 +201,13 @@ names cannot contain a slash. The reasoning therefore lives here:
   elected spawn master actually writes it, but the election is client-side, so
   the rules cannot express which client that is. Field validation is the
   available protection here, not authorship.
+- **`round`** — the shared clock, writable by any signed-in player for the same
+  reason `enemies` is: the spawn master election is client-side, so the rules
+  cannot express which client is entitled to write it. What they *can* express
+  is that `index` only ever goes up. Nobody can rewind a session to replay a
+  world, and a stale client cannot clobber the round everybody else has moved
+  on to. `duration` is bounded at both ends so a bad write cannot leave the
+  party staring at a twelve-hour countdown; the client clamps it again on read.
 - **`hits/$victim`** — a per-player inbox. You read only your own; anyone may
   post a claim into yours stamped with their own uid, and your client decides
   whether to accept it. Only you can clear your inbox.
@@ -234,14 +281,20 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 118 checks covering
+Open `tests.html` in a browser to run the test suite — 131 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, block and power-up behaviour, the death and respawn
 sequence, enemy behaviour at ledges, enemy population limits, fair spawning,
 hitbox fidelity against the rendered sprite, enemy artwork (the turtle's head
 and neck are scanned for in the rendered frame), power-up safety, moving
-platforms, springs and hazards, and shadow casting, alongside DOM and
-configuration checks.
+platforms, springs and hazards, the multiplayer round clock, and shadow
+casting, alongside DOM and configuration checks.
+
+The round suite is worth a word on how it is written. Everything the round
+system decides is a pure function of one timestamp — which world, how much time
+is left, whether the world should be frozen — so the whole of it is tested by
+handing those functions a synthetic round and a made-up clock. No database, no
+second browser, no waiting two and a half minutes for a round to end.
 
 The level-geometry suite runs against **every level in the campaign**, not just
 the first one — a stage you only reach on the fourth clear is exactly the one

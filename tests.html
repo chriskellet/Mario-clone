@@ -1728,6 +1728,254 @@
             assertEqual(multiplayer.coinFromKey('coin_notanumber'), null, 'Bad keys should resolve to null');
         });
 
+        // Test Suite: Multiplayer Rounds
+        const roundTests = new TestRunner('Multiplayer Rounds');
+
+        // Drives the real derivations against a synthetic round. Everything the
+        // round system does is a pure function of one timestamp, which is what
+        // makes it testable without a database.
+        function withRound(round, connected, fn) {
+            const saved = {
+                round: multiplayerState.round,
+                connected: multiplayerState.connected,
+                offset: multiplayerState.serverTimeOffset,
+            };
+
+            multiplayerState.round = round;
+            multiplayerState.connected = connected;
+            multiplayerState.serverTimeOffset = 0;
+
+            try {
+                return fn();
+            } finally {
+                multiplayerState.round = saved.round;
+                multiplayerState.connected = saved.connected;
+                multiplayerState.serverTimeOffset = saved.offset;
+            }
+        }
+
+        roundTests.test('A round counter maps to a world and a lap', () => {
+            assertEqual(roundDesign(0).design, LEVELS[0], 'Round 0 is the first world');
+            assertEqual(roundDesign(0).lap, 1, 'Round 0 is lap 1');
+
+            const last = LEVELS.length - 1;
+            assertEqual(roundDesign(last).design, LEVELS[last], 'The last world closes lap 1');
+            assertEqual(roundDesign(last).lap, 1, 'The last world is still lap 1');
+
+            // Rounds keep counting up, so the campaign comes round again.
+            assertEqual(roundDesign(LEVELS.length).design, LEVELS[0], 'The counter wraps to the first world');
+            assertEqual(roundDesign(LEVELS.length).lap, 2, 'Wrapping starts lap 2');
+            assertEqual(roundDesign(LEVELS.length * 3 + 2).index, 2, 'Deep counters still land on the right world');
+        });
+
+        roundTests.test('Every round lands on a real world', () => {
+            for (let counter = 0; counter < LEVELS.length * 4; counter++) {
+                const spot = roundDesign(counter);
+                assert(spot.design && spot.design.name, `Round ${counter} has no design`);
+                assert(spot.index >= 0 && spot.index < LEVELS.length, `Round ${counter} indexed out of range`);
+                assert(spot.lap >= 1, `Round ${counter} produced lap ${spot.lap}`);
+            }
+        });
+
+        roundTests.test('The clock reads active, then intermission, then expired', () => {
+            const round = { index: 3, startedAt: 1000000, duration: 150000 };
+
+            withRound(round, true, () => {
+                const start = roundView(round.startedAt);
+                assertEqual(start.phase, ROUND_PHASE.ACTIVE, 'A round opens active');
+                assertEqual(start.remainingMs, 150000, 'A fresh round has its full duration left');
+
+                const middle = roundView(round.startedAt + 50000);
+                assertEqual(middle.phase, ROUND_PHASE.ACTIVE, 'Still active halfway through');
+                assertEqual(middle.remainingMs, 100000, 'Remaining time counts down');
+
+                const whistle = roundView(round.startedAt + 150000);
+                assertEqual(whistle.phase, ROUND_PHASE.INTERMISSION, 'The clock running out settles the round');
+                assertEqual(whistle.remainingMs, ROUND.INTERMISSION_MS, 'The intermission starts at full length');
+
+                const breakEnd = roundView(round.startedAt + 150000 + ROUND.INTERMISSION_MS);
+                assertEqual(breakEnd.phase, ROUND_PHASE.EXPIRED, 'The intermission runs out into expired');
+
+                const later = roundView(round.startedAt + 999999);
+                assertEqual(later.phase, ROUND_PHASE.EXPIRED, 'A long-dead round stays expired');
+                assertEqual(later.index, 3, 'The index survives expiry so the master knows what to advance from');
+            });
+        });
+
+        roundTests.test('The clock is null until the first snapshot arrives', () => {
+            withRound(null, true, () => {
+                assertEqual(roundView(), null, 'No round means no view');
+                assertEqual(roundIsSettled(), false, 'Nothing to settle before a round exists');
+            });
+        });
+
+        roundTests.test('A start time in the future cannot show more than a full round', () => {
+            // A device whose clock drifts after the offset was last read can see
+            // a startedAt slightly ahead of its own now.
+            const round = { index: 0, startedAt: 1000000, duration: 150000 };
+            withRound(round, true, () => {
+                const view = roundView(round.startedAt - 20000);
+                assertEqual(view.phase, ROUND_PHASE.ACTIVE, 'Skew should not change the phase');
+                assertEqual(view.remainingMs, 150000, 'Remaining time is capped at the round duration');
+            });
+        });
+
+        roundTests.test('The world is frozen between rounds', () => {
+            const round = { index: 0, startedAt: 1000000, duration: 150000 };
+            const realView = window.roundView;
+
+            withRound(round, true, () => {
+                // roundIsSettled reads the live clock, so drive it through a stub.
+                window.roundView = () => ({ phase: ROUND_PHASE.ACTIVE, index: 0, remainingMs: 5000 });
+                assertEqual(roundIsSettled(), false, 'An active round is not settled');
+
+                window.roundView = () => ({ phase: ROUND_PHASE.INTERMISSION, index: 0, remainingMs: 5000 });
+                assertEqual(roundIsSettled(), true, 'An intermission is settled');
+
+                window.roundView = () => ({ phase: ROUND_PHASE.EXPIRED, index: 0, remainingMs: 0 });
+                assertEqual(roundIsSettled(), true, 'An expired round is settled');
+            });
+
+            window.roundView = realView;
+        });
+
+        roundTests.test('Round durations from the database are clamped', () => {
+            // The rules bound this too; the client refuses to render a nonsense
+            // countdown even if one ever gets past them.
+            assert(ROUND.MIN_DURATION_MS < ROUND.DURATION_MS, 'The default duration should sit above the floor');
+            assert(ROUND.MAX_DURATION_MS > ROUND.DURATION_MS, 'The default duration should sit below the ceiling');
+            assertEqual(clamp(5, ROUND.MIN_DURATION_MS, ROUND.MAX_DURATION_MS), ROUND.MIN_DURATION_MS,
+                'A tiny duration clamps up to the floor');
+            assertEqual(clamp(99999999, ROUND.MIN_DURATION_MS, ROUND.MAX_DURATION_MS), ROUND.MAX_DURATION_MS,
+                'A huge duration clamps down to the ceiling');
+        });
+
+        roundTests.test('The clock reads as minutes and seconds', () => {
+            assertEqual(formatClock(150000), '2:30', 'Two and a half minutes');
+            assertEqual(formatClock(60000), '1:00', 'A minute pads its seconds');
+            assertEqual(formatClock(9000), '0:09', 'Single seconds are padded');
+            assertEqual(formatClock(0), '0:00', 'Zero reads as zero');
+            assertEqual(formatClock(-5000), '0:00', 'A clock never goes negative');
+        });
+
+        roundTests.test('Standings order by score, then by name', () => {
+            const saved = {
+                remote: multiplayerState.remotePlayers,
+                id: multiplayerState.playerId,
+                name: multiplayerState.playerName,
+                score: gameState.score,
+            };
+
+            multiplayerState.remotePlayers = new Map([
+                ['uid-b', { name: 'Bea', score: 900 }],
+                ['uid-c', { name: 'Cai', score: 300 }],
+                ['uid-d', { name: 'Ali', score: 300 }],
+            ]);
+            multiplayerState.playerId = 'uid-me';
+            multiplayerState.playerName = 'Me';
+            gameState.score = 500;
+
+            try {
+                const board = roundStandings();
+                assertEqual(board.length, 4, 'Everyone in the session is on the board');
+                assertEqual(board[0].name, 'Bea', 'Highest score leads');
+                assertEqual(board[1].name, 'Me', 'Our own score is placed among the rest');
+                assert(board[1].isSelf, 'Our own row is flagged');
+                // 300 each - the tie has to break the same way on every screen,
+                // not on whatever order the players happened to arrive in.
+                assertEqual(board[2].name, 'Ali', 'A tie breaks on name');
+                assertEqual(board[3].name, 'Cai', 'A tie breaks on name');
+            } finally {
+                multiplayerState.remotePlayers = saved.remote;
+                multiplayerState.playerId = saved.id;
+                multiplayerState.playerName = saved.name;
+                gameState.score = saved.score;
+            }
+        });
+
+        roundTests.test('The level plan follows the round, not the level counter', () => {
+            const savedLevel = gameState.level;
+            gameState.level = 1;
+
+            try {
+                withRound({ index: 2, startedAt: Date.now(), duration: 150000 }, true, () => {
+                    const plan = levelPlan();
+                    assertEqual(plan.design, LEVELS[2], 'Round 2 puts everyone in the third world');
+                    assertEqual(plan.label, '1-3', 'The HUD label follows the round');
+                });
+
+                withRound({ index: LEVELS.length, startedAt: Date.now(), duration: 150000 }, true, () => {
+                    assertEqual(levelPlan().design, LEVELS[0], 'The rounds wrap back to the first world');
+                    assertEqual(levelPlan().lap, 2, 'Wrapping counts as a new lap');
+                });
+
+                // Before the first snapshot there is nothing to go on.
+                withRound(null, true, () => {
+                    assertEqual(levelPlan().design, LEVELS[0], 'With no round yet, everyone stands in the first world');
+                });
+            } finally {
+                gameState.level = savedLevel;
+            }
+        });
+
+        roundTests.test('Single player is untouched by the round clock', () => {
+            const savedLevel = gameState.level;
+
+            try {
+                // A round left in state must not leak into a solo run.
+                withRound({ index: 3, startedAt: Date.now(), duration: 150000 }, false, () => {
+                    gameState.level = 2;
+                    assertEqual(levelPlan().design, LEVELS[1], 'Solo play follows the level counter');
+                    assertEqual(levelPlan().label, '1-2', 'Solo labels come from the campaign, not the round');
+                });
+            } finally {
+                gameState.level = savedLevel;
+            }
+        });
+
+        roundTests.test('The HUD clock shows the round, not a dash', () => {
+            const timeEl = document.getElementById('time');
+            const labelEl = document.getElementById('time-label');
+            assert(timeEl, 'Time element not found');
+            assert(labelEl, 'Time label element not found - the clock caption has no id');
+
+            const savedText = timeEl.textContent;
+            const savedLabel = labelEl.textContent;
+            const startedAt = Date.now();
+
+            try {
+                withRound({ index: 0, startedAt, duration: 150000 }, true, () => {
+                    const urgent = updateClockDisplay();
+                    assertEqual(labelEl.textContent, 'Round', 'The caption reads Round in multiplayer');
+                    assert(/^\d+:\d\d$/.test(timeEl.textContent), `Expected m:ss, got ${timeEl.textContent}`);
+                    assertEqual(urgent, false, 'A round that has just started is not urgent');
+                });
+
+                // The last thirty seconds should be shouting.
+                withRound({ index: 0, startedAt: startedAt - 145000, duration: 150000 }, true, () => {
+                    assertEqual(updateClockDisplay(), true, 'The end of a round is urgent');
+                });
+
+                // Connected, but no snapshot yet.
+                withRound(null, true, () => {
+                    updateClockDisplay();
+                    assertEqual(timeEl.textContent, '--', 'With no round yet the clock is blank');
+                });
+            } finally {
+                timeEl.textContent = savedText;
+                labelEl.textContent = savedLabel;
+            }
+        });
+
+        roundTests.test('Multiplayer builds no flagpole, so only the clock ends a round', () => {
+            // The round clock is the only ending multiplayer has: initLevel
+            // deliberately skips the flag when connected, so a session that
+            // could not read the clock would never end at all.
+            assert(typeof updateRound === 'function', 'updateRound should drive the round forward');
+            assert(typeof multiplayer.advanceRound === 'function', 'The master needs a way to open the next world');
+            assert(typeof multiplayer.ensureRound === 'function', 'The first client needs a way to open round zero');
+        });
+
         // Run all tests
         async function runAllTests() {
             const suites = [
@@ -1752,7 +2000,8 @@
                 powerUpTests,
                 rideTests,
                 pwaTests,
-                multiplayerTests
+                multiplayerTests,
+                roundTests
             ];
 
             const allResults = [];
@@ -1838,7 +2087,7 @@
         <div><span id="coins"></span></div>
         <div><span id="lives"></span></div>
         <div><span id="level"></span></div>
-        <div class="time"><span id="time"></span></div>
+        <div class="time"><span id="time-label"></span><span id="time"></span></div>
         <div><span id="combo"></span></div>
     </div>
     <script src="game.js"></script>
