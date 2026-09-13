@@ -24,7 +24,7 @@ struct JellyfinLibraryService: LibraryServicing {
     /// Fields every detail-ish screen needs. Shelves ask for less.
     static let detailFields: [ItemField] = [
         .overview, .genres, .people, .studios, .taglines, .primaryImageAspectRatio,
-        .childCount, .recursiveItemCount, .dateCreated, .seriesStatus, .mediaSources,
+        .childCount, .recursiveItemCount, .dateCreated, .mediaSources,
     ]
     static let shelfFields: [ItemField] = [.primaryImageAspectRatio, .overview]
 

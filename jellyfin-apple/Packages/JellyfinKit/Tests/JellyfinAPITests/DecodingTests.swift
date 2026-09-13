@@ -41,6 +41,16 @@ struct DecodingTests {
         #expect(item.collectionType == .unknown)
     }
 
+    @Test("Live TV item kinds match the server's actual Type strings")
+    func liveTvItemKinds() throws {
+        // The server's BaseItemKind serializes a channel as "TvChannel" but an EPG program as
+        // plain "Program" (LiveTvProgram.GetClientTypeName() returns "Program", not "TvProgram").
+        let channel = try decoder.decode(BaseItem.self, from: Data(#"{"Id":"c","Name":"Ch","Type":"TvChannel"}"#.utf8))
+        let program = try decoder.decode(BaseItem.self, from: Data(#"{"Id":"p","Name":"Show","Type":"Program"}"#.utf8))
+        #expect(channel.type == .liveTvChannel)
+        #expect(program.type == .liveTvProgram)
+    }
+
     @Test("Query results tolerate missing counts")
     func queryResult() throws {
         let json = #"{"Items":[{"Id":"a","Name":"A"}]}"#

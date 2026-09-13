@@ -35,7 +35,10 @@ public enum ItemKind: String, LenientStringEnum, CaseIterable {
     case studio = "Studio"
     case playlist = "Playlist"
     case liveTvChannel = "TvChannel"
-    case liveTvProgram = "TvProgram"
+    // The server's `BaseItemDto.Type` for an EPG program is "Program" (its `LiveTvProgram`
+    // entity overrides `GetClientTypeName()` to return that), not "TvProgram" - that raw value
+    // belongs to a different, legacy-only `BaseItemKind` member that never appears in a response.
+    case liveTvProgram = "Program"
     case recording = "Recording"
     case unknown = "Unknown"
 }
@@ -111,7 +114,6 @@ public enum ItemField: String, Sendable, Hashable {
     case chapters = "Chapters"
     case path = "Path"
     case providerIds = "ProviderIds"
-    case seriesStatus = "SeriesStatus"
 }
 
 public enum SeriesStatus: String, LenientStringEnum {

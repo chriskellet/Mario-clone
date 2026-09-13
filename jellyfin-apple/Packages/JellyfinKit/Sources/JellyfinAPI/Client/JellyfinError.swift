@@ -17,25 +17,39 @@ extension JellyfinError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidServerURL:
-            return String(localized: "That doesn't look like a valid server address.")
+            return localizedErrorString("That doesn't look like a valid server address.")
         case .invalidResponse:
-            return String(localized: "The server sent an unexpected response.")
+            return localizedErrorString("The server sent an unexpected response.")
         case .notSignedIn:
-            return String(localized: "You're not signed in.")
+            return localizedErrorString("You're not signed in.")
         case .unauthorized:
-            return String(localized: "The username or password is incorrect.")
+            return localizedErrorString("The username or password is incorrect.")
         case .forbidden:
-            return String(localized: "You don't have permission to do that.")
+            return localizedErrorString("You don't have permission to do that.")
         case .notFound:
-            return String(localized: "The item couldn't be found on the server.")
+            return localizedErrorString("The item couldn't be found on the server.")
         case .server(let statusCode, _):
-            return String(localized: "The server returned an error (\(statusCode)).")
+            return localizedErrorString("The server returned an error (\(statusCode)).")
         case .decoding:
-            return String(localized: "The server's response couldn't be read.")
+            return localizedErrorString("The server's response couldn't be read.")
         case .transport:
-            return String(localized: "Couldn't reach the server. Check your connection and address.")
+            return localizedErrorString("Couldn't reach the server. Check your connection and address.")
         case .noPlayableMediaSource:
-            return String(localized: "This item has no playable video.")
+            return localizedErrorString("This item has no playable video.")
         }
     }
 }
+
+// `String(localized:)` (and `String.LocalizationValue`) are part of the Apple-only Foundation
+// overlay and are not implemented by swift-corelibs-foundation, so this package (which must also
+// build on Linux for `swift test`) can't call it unconditionally. Fall back to the plain,
+// un-localized string there.
+#if canImport(Darwin)
+private func localizedErrorString(_ value: String.LocalizationValue) -> String {
+    String(localized: value)
+}
+#else
+private func localizedErrorString(_ value: String) -> String {
+    value
+}
+#endif
