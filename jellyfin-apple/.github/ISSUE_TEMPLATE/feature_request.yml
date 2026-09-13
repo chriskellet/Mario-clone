@@ -1,0 +1,75 @@
+name: Feature request
+description: Suggest something Marquee should do.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Marquee aims to feel like Apple made it: system components, system player, nothing
+        invented. Requests for custom UI in place of a system control are unlikely to be taken up
+        — see [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What can't you do today, or what's awkward?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should Marquee do instead? Sketches, screenshots of other apps, or a link to a Jellyfin endpoint are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - iOS
+        - tvOS
+        - Both
+    validations:
+      required: true
+
+  - type: input
+    id: server-version
+    attributes:
+      label: Jellyfin server version (if the request depends on a server feature/endpoint)
+      placeholder: "e.g. 10.9.11"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: playback-method
+    attributes:
+      label: Playback method (only if this is about playback)
+      options:
+        - Not applicable
+        - Direct play
+        - Direct stream (remux)
+        - Transcode (HLS)
+        - Live TV
+      default: 0
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and this hasn't already been requested.
+          required: true
