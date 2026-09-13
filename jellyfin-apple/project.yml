@@ -1,0 +1,111 @@
+# XcodeGen spec. Run `xcodegen generate` (brew install xcodegen) to produce Marquee.xcodeproj.
+# The .xcodeproj is deliberately not committed: this file is the single source of truth.
+name: Marquee
+options:
+  bundleIdPrefix: uk.co.kedos
+  deploymentTarget:
+    iOS: "26.0"
+    tvOS: "26.0"
+  xcodeVersion: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: 1
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEVELOPMENT_TEAM: ""          # Set your team here or via xcconfig; left blank on purpose.
+    CODE_SIGN_STYLE: Automatic
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    GENERATE_INFOPLIST_FILE: NO
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+
+packages:
+  JellyfinKit:
+    path: Packages/JellyfinKit
+
+targets:
+  Marquee:
+    type: application
+    platform: iOS
+    supportedDestinations: [iOS]
+    sources:
+      - path: Marquee/Shared
+      - path: Marquee/iOS
+    dependencies:
+      - package: JellyfinKit
+        product: JellyfinAPI
+    info:
+      path: Marquee/iOS/Info.plist
+      properties:
+        CFBundleDisplayName: Marquee
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIBackgroundModes: [audio]
+        ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: Marquee connects to your Jellyfin server on your local network.
+        # TODO: tighten to NSAllowsLocalNetworking once HTTPS-by-default is the norm for home servers.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uk.co.kedos.marquee
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  Marquee TV:
+    type: application
+    platform: tvOS
+    sources:
+      - path: Marquee/Shared
+      - path: Marquee/tvOS
+    dependencies:
+      - package: JellyfinKit
+        product: JellyfinAPI
+    info:
+      path: Marquee/tvOS/Info.plist
+      properties:
+        CFBundleDisplayName: Marquee
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UIUserInterfaceStyle: Automatic
+        ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: Marquee connects to your Jellyfin server on your local network.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uk.co.kedos.marquee
+        TARGETED_DEVICE_FAMILY: "3"
+        ASSETCATALOG_COMPILER_APPICON_NAME: App Icon & Top Shelf Image
+        ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME: LaunchImage
+
+schemes:
+  Marquee:
+    build:
+      targets:
+        Marquee: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: []
+  Marquee TV:
+    build:
+      targets:
+        Marquee TV: all
+    run:
+      config: Debug
