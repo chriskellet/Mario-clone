@@ -6,6 +6,9 @@ import JellyfinAPI
 enum DeviceIdentity {
     static let clientName = "Marquee"
 
+    /// `UIDevice` is main-actor isolated, so this is too. It is only ever called while
+    /// building `AppSession`, which is itself main-actor isolated.
+    @MainActor
     static func make(keychain: KeychainStore = .shared) -> ClientIdentity {
         ClientIdentity(
             clientName: clientName,
@@ -19,6 +22,7 @@ enum DeviceIdentity {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
     }
 
+    @MainActor
     private static var deviceName: String {
         #if os(tvOS)
         return "Apple TV"

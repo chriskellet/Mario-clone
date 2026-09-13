@@ -26,7 +26,9 @@ final class PlayerHostController: UIViewController, AVPlayerViewControllerDelega
 
     private var currentRequestID: UUID?
     private var playback: PlaybackSession?
-    private weak var playerController: PlayerViewController?
+    /// Held strongly: once Picture in Picture dismisses the controller, UIKit no longer
+    /// retains it, and a deallocated controller can never restore its full-screen UI.
+    private var playerController: PlayerViewController?
     private var isInPictureInPicture = false
 
     func present(_ request: PlaybackRequest, session: ActiveSession) {
@@ -51,6 +53,8 @@ final class PlayerHostController: UIViewController, AVPlayerViewControllerDelega
                 let player = try await playback.start()
                 controller.player = player
                 player.play()
+            } catch is CancellationError {
+                // Dismissed before the stream was ready; the session already reported itself stopped.
             } catch {
                 self?.showFailure(error, on: controller)
             }
@@ -84,9 +88,15 @@ final class PlayerHostController: UIViewController, AVPlayerViewControllerDelega
 
     // MARK: Picture in Picture
 
+    // TODO: confirm against the SDK which of these delegate callbacks exist on tvOS
+    // (`…ShouldAutomaticallyDismissAtPictureInPictureStart` is iOS-only) and that
+    // `AVPlayerViewControllerDelegate` is main-actor annotated, so these main-actor
+    // methods satisfy it under strict concurrency without `nonisolated` shims.
+    #if os(iOS)
     func playerViewControllerShouldAutomaticallyDismissAtPictureInPictureStart(_ playerViewController: AVPlayerViewController) -> Bool {
         true
     }
+    #endif
 
     func playerViewControllerWillStartPictureInPicture(_ playerViewController: AVPlayerViewController) {
         isInPictureInPicture = true
@@ -111,7 +121,7 @@ final class PlayerHostController: UIViewController, AVPlayerViewControllerDelega
 
 /// Reports its own dismissal so the host can end the playback session exactly once.
 final class PlayerViewController: AVPlayerViewController {
-    var onDismissed: (() -> Void)?
+    var onDismissed: (@MainActor () -> Void)?
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)

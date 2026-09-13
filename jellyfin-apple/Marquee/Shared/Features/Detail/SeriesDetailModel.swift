@@ -31,11 +31,12 @@ final class SeriesDetailModel {
         let seriesID = series.seriesId ?? series.id
         async let fullSeries = library.item(id: seriesID)
         async let seasonList = library.seasons(seriesID: seriesID)
-        async let nextUpList = try? library.nextUp(seriesID: seriesID).first
+        async let nextUpList = library.nextUp(seriesID: seriesID)
         do {
             series = try await fullSeries
             seasons = try await seasonList
-            nextUp = await nextUpList
+            // Up Next is a nicety: a failure there must not fail the whole page.
+            nextUp = (try? await nextUpList)?.first
             let previousSeasonID = selectedSeasonID
             if selectedSeasonID == nil || !seasons.contains(where: { $0.id == selectedSeasonID }) {
                 selectedSeasonID = nextUp?.seasonId ?? seasons.first { ($0.userData?.unplayedItemCount ?? 0) > 0 }?.id ?? seasons.first?.id

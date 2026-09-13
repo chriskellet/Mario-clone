@@ -32,7 +32,8 @@ final class HomeModel {
             sections.append(HomeSection(id: "nextUp", title: String(localized: "Next Up"), items: nextUp, layout: .landscape))
         }
 
-        let libraries = (await views ?? []).filter { $0.collectionType?.supportsLatestShelf == true }
+        let loadedViews = await views
+        let libraries = (loadedViews ?? []).filter { $0.collectionType?.supportsLatestShelf == true }
         let latest = await withTaskGroup(of: (Int, [BaseItem]).self) { group in
             for (index, view) in libraries.enumerated() {
                 group.addTask {
@@ -57,14 +58,17 @@ final class HomeModel {
             ))
         }
 
-        if sections.isEmpty, await views == nil {
+        // A newer `.task(id:)` run has already replaced this one; don't clobber its state.
+        guard !Task.isCancelled else { return }
+        if sections.isEmpty, loadedViews == nil {
             state = .failed(JellyfinError.transport(underlying: "No shelves loaded"))
         } else {
             state = .loaded(sections)
         }
     }
 
-    private static func attempt<T: Sendable>(_ work: @Sendable () async throws -> T) async -> T? {
+    /// `nonisolated` so shelf loads run off the main actor instead of hopping onto it.
+    private nonisolated static func attempt<T: Sendable>(_ work: @Sendable () async throws -> T) async -> T? {
         try? await work()
     }
 }

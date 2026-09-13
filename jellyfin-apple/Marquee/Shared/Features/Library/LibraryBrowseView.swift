@@ -72,8 +72,22 @@ struct SortFilterMenu: View {
 
     var body: some View {
         #if os(tvOS)
+        // `Menu` is unavailable on tvOS, so the controls sit inline and use the focus engine.
+        // TODO: check the inline bar's default picker rendering on a real Apple TV.
         HStack(spacing: 24) {
-            sortMenu
+            Picker("Sort", selection: $model.criteria.sort) {
+                ForEach(model.sortOptions, id: \.self) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            Button {
+                model.criteria.order = model.criteria.order == .ascending ? .descending : .ascending
+            } label: {
+                Label(
+                    model.criteria.order == .ascending ? "Ascending" : "Descending",
+                    systemImage: model.criteria.order == .ascending ? "arrow.up" : "arrow.down"
+                )
+            }
             Toggle("Unwatched", isOn: $model.criteria.unplayedOnly)
             Toggle("Favourites", isOn: $model.criteria.favoritesOnly)
             Spacer()
@@ -91,6 +105,7 @@ struct SortFilterMenu: View {
         #endif
     }
 
+    #if !os(tvOS)
     private var isFiltered: Bool {
         model.criteria.unplayedOnly || model.criteria.favoritesOnly
     }
@@ -103,11 +118,13 @@ struct SortFilterMenu: View {
                 }
             }
             Picker("Order", selection: $model.criteria.order) {
-                Text("Ascending").tag(SortOrder.ascending)
-                Text("Descending").tag(SortOrder.descending)
+                // Qualified: Foundation also declares `SortOrder`.
+                Text("Ascending").tag(JellyfinAPI.SortOrder.ascending)
+                Text("Descending").tag(JellyfinAPI.SortOrder.descending)
             }
         } label: {
             Label("Sort: \(model.criteria.sort.title)", systemImage: "arrow.up.arrow.down")
         }
     }
+    #endif
 }

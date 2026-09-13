@@ -13,7 +13,9 @@ struct ConnectServerView: View {
             VStack(spacing: 16) {
                 TextField("Server address", text: $model.address, prompt: Text("jellyfin.example.com"))
                     .textContentType(.URL)
+                    #if os(iOS)
                     .keyboardType(.URL)
+                    #endif
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.go)

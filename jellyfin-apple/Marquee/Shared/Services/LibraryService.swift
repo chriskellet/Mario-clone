@@ -41,7 +41,7 @@ struct JellyfinLibraryService: LibraryServicing {
     /// Next unwatched episodes; pass a series id to scope it to one show.
     func nextUp(seriesID: String?) async throws -> [BaseItem] {
         let userID = try await client.requireUserID()
-        return try await client.send(ShowsEndpoints.nextUp(userID: userID, fields: Self.shelfFields)).items
+        return try await client.send(ShowsEndpoints.nextUp(userID: userID, seriesID: seriesID, fields: Self.shelfFields)).items
     }
 
     func latest(in library: BaseItem) async throws -> [BaseItem] {

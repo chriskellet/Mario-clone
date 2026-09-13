@@ -22,7 +22,8 @@ final class LibraryBrowseModel {
     /// Everything that changes the query. The view reloads whenever this changes.
     struct Criteria: Hashable {
         var sort: SortBy
-        var order: SortOrder
+        /// Qualified: Foundation declares its own `SortOrder`, so the bare name is ambiguous here.
+        var order: JellyfinAPI.SortOrder
         var unplayedOnly = false
         var favoritesOnly = false
     }

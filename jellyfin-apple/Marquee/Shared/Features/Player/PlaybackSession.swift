@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import UIKit
 import JellyfinAPI
 
 /// One playback of one item: resolves the stream, owns the `AVPlayer`, and keeps the
@@ -30,6 +31,12 @@ final class PlaybackSession {
 
     func start() async throws -> AVPlayer {
         let prepared = try await service.prepare(item: request.item, startTicks: request.startTicks)
+        // The player was dismissed while the stream was being prepared. Report the session as
+        // stopped anyway so the server tears down any transcode it just started for us.
+        guard !stopped else {
+            await service.reportStopped(prepared, positionTicks: prepared.startTicks)
+            throw CancellationError()
+        }
         self.prepared = prepared
 
         let asset = AVURLAsset(url: prepared.stream.url)
@@ -40,9 +47,11 @@ final class PlaybackSession {
         self.player = player
 
         // Direct streams seek locally; transcodes already start at the offset server-side.
+        // The seek is issued, not awaited: awaiting it suspends until the asset is ready,
+        // which would leave the player controller empty until the first segment loads.
         if prepared.stream.playMethod != .transcode, prepared.startTicks > 0 {
             let target = CMTime(seconds: Ticks.seconds(prepared.startTicks), preferredTimescale: 600)
-            _ = await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .positiveInfinity)
+            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .positiveInfinity)
         }
 
         installObservers(on: player, item: playerItem)

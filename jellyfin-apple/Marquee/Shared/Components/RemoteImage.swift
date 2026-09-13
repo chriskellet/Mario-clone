@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Artwork view with memory-cache-first rendering so scrolling back never flashes a placeholder.
 struct RemoteImage: View {
@@ -44,6 +45,11 @@ struct RemoteImage: View {
             image = cached
             loadedURL = url
             return
+        }
+        // A recycled cell pointed at new artwork must not keep showing the old image.
+        if loadedURL != nil {
+            image = nil
+            loadedURL = nil
         }
         guard let fetched = try? await ImageLoader.shared.image(for: url), !Task.isCancelled else { return }
         withAnimation {
