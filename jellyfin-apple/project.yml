@@ -69,6 +69,7 @@ targets:
   Marquee TV:
     type: application
     platform: tvOS
+    supportedDestinations: [tvOS]
     sources:
       - path: Marquee/Shared
       - path: Marquee/tvOS
@@ -100,9 +101,6 @@ schemes:
         Marquee: all
     run:
       config: Debug
-    test:
-      config: Debug
-      targets: []
   Marquee TV:
     build:
       targets:
