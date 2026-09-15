@@ -336,6 +336,22 @@ decide everyone else is asleep and seize the role.
   table entry giving the sky, the backdrop, the dirt, the masonry and the tune.
   No renderer hard-codes a colour, so a new setting is a table entry rather than
   a new drawing routine.
+- **Atmosphere as a layer of its own.** What sells depth is not more detail in
+  the level, it is the air between you and the rest of the world. Each theme
+  names its horizon haze, its furthest silhouette, the light hanging in the air
+  and whatever is drifting past the camera, and one set of renderers paints all
+  of it: three depths of backdrop, painted far first, with the haze settling
+  between them; sunbeams, cave-roof light or furnace glow, drawn additively and
+  fading along their length; pollen, sea spray, cave motes, high wisps,
+  snowfall or embers, held in screen space and moved against the camera by
+  their own depth so near ones sweep past and far ones barely shift; and a
+  vignette in the theme's own colour. A new world gets its own weather by
+  filling in six fields.
+- **Shape before colour.** Backdrop pieces, clouds and cloud banks are filled
+  in their theme colour and then modelled by one shared routine — lit along the
+  top, falling into shadow at the base, clipped to the shape it is modelling —
+  so a hill, a buttress, a stalagmite and a cloud all catch the light the same
+  way without any of them knowing what colour they are.
 - **Collision courtesies.** Clipping a few pixels of a block's corner on the
   way up slides you past it instead of killing the jump, and resolution always
   pushes clear of the deepest overlap so nothing ends up embedded in a stack of
@@ -359,15 +375,29 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 156 checks covering
+Open `tests.html` in a browser to run the test suite — 166 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, block and power-up behaviour, the death and respawn
 sequence, enemy behaviour at ledges, enemy population limits, fair spawning,
 hitbox fidelity against the rendered sprite, enemy artwork (the turtle's head
-and neck are scanned for in the rendered frame), power-up safety, moving
-platforms, springs and hazards, the multiplayer round clock, territory
-capture, coin claims and their expiry, what happens when the server refuses a
-subscription, and shadow casting, alongside DOM and configuration checks.
+and neck are scanned for in the rendered frame), scenery and atmosphere,
+power-up safety, moving platforms, springs and hazards, the multiplayer round
+clock, territory capture, coin claims and their expiry, what happens when the
+server refuses a subscription, and shadow casting, alongside DOM and
+configuration checks.
+
+The scenery suite holds the backdrop to the things that are easy to get wrong
+and hard to notice: every theme has to describe its own atmosphere, the
+backdrop has to be queued far layer first (drawn in generation order, a distant
+hill painted straight over a near one and the depth collapsed), snow only lands
+on peaks that are meant to be snowy (it used to land on the hills behind a
+summer beach), the drifting weather is seeded inside the frame and wraps back
+into it, and motes move against the camera by their depth rather than all at
+one speed. Two of them are worth the price on their own: every world in the
+campaign is rendered, which catches a theme missing anything a renderer reads,
+and a whole frame is drawn with `save`/`restore` counted, because canvas state
+is a stack and a draw that saves without restoring corrupts every frame after
+it rather than its own.
 
 The round suite is worth a word on how it is written. Everything the round
 system decides is a pure function of one timestamp — which world, how much time
