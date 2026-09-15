@@ -3131,52 +3131,50 @@ function drawMarioSprite(ctx, o) {
         legSwing = Math.sin(o.walkPhase) * 6;
     }
 
-    ctx.strokeStyle = '#1E4C8F';
+    // The far leg and the far arm are drawn a shade darker, which is most of
+    // what stops a body of one flat colour reading as a cardboard cut-out.
+    const backX = (-5 + legSwing * 0.5) * u;
+    const frontX = (5 - legSwing * 0.5) * u;
     ctx.lineWidth = 5 * u;
     ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(-4 * u, -10 * u);
-    ctx.lineTo((-5 + legSwing * 0.5) * u, -2 * u);
-    ctx.moveTo(4 * u, -10 * u);
-    ctx.lineTo((5 - legSwing * 0.5) * u, -2 * u);
-    ctx.stroke();
+    drawLeg(ctx, -4 * u, backX, u, '#1E4C8F', true);
+    drawLeg(ctx, 4 * u, frontX, u, '#1E4C8F', false);
 
-    // Shoes
-    ctx.fillStyle = '#5C3C1C';
-    ctx.beginPath();
-    ctx.ellipse((-6 + legSwing * 0.5) * u, -1.5 * u, 5 * u, 2.6 * u, 0, 0, Math.PI * 2);
-    ctx.ellipse((6 - legSwing * 0.5) * u, -1.5 * u, 5 * u, 2.6 * u, 0, 0, Math.PI * 2);
-    ctx.fill();
+    drawShoe(ctx, (-6 + legSwing * 0.5) * u, u, true);
+    drawShoe(ctx, (6 - legSwing * 0.5) * u, u, false);
+
+    // The torso rides over planted feet: a walk without it is a pair of legs
+    // sliding under a statue.
+    ctx.save();
+    if (!airborne && o.moving) ctx.translate(0, -Math.abs(Math.sin(o.walkPhase)) * 0.9 * u);
+    // Leaning into a skid says "I am trying to stop" before the dust does.
+    if (o.skidding) {
+        ctx.translate(0, -10 * u);
+        ctx.rotate(-0.13);
+        ctx.translate(0, 10 * u);
+    }
 
     // --- Body / overalls ---
-    ctx.fillStyle = o.palette.overalls;
     ctx.beginPath();
     ctx.roundRect(-8 * u, -20 * u, 16 * u, 12 * u, 3 * u);
-    ctx.fill();
+    fillModelled(ctx, o.palette.overalls, -20 * u, 12 * u, 0.85);
 
     // Shirt (shoulders and arms)
-    ctx.fillStyle = o.palette.shirt;
     ctx.beginPath();
     ctx.roundRect(-9 * u, -26 * u, 18 * u, 8 * u, 3 * u);
-    ctx.fill();
+    fillModelled(ctx, o.palette.shirt, -26 * u, 8 * u, 0.85);
 
     // Arms
     const armSwing = o.skidding ? -7 : (o.moving && !airborne ? Math.cos(o.walkPhase) * 5 : (airborne ? -6 : 0));
-    ctx.strokeStyle = o.palette.shirt;
+    const armLift = (-17 + Math.abs(armSwing) * 0.2) * u;
+    const handLift = (-16 + Math.abs(armSwing) * 0.2) * u;
     ctx.lineWidth = 4.5 * u;
-    ctx.beginPath();
-    ctx.moveTo(-8 * u, -24 * u);
-    ctx.lineTo((-11 - armSwing * 0.4) * u, (-17 + Math.abs(armSwing) * 0.2) * u);
-    ctx.moveTo(8 * u, -24 * u);
-    ctx.lineTo((11 + armSwing * 0.4) * u, (-17 + Math.abs(armSwing) * 0.2) * u);
-    ctx.stroke();
+    drawArm(ctx, -8 * u, (-11 - armSwing * 0.4) * u, armLift, u, o.palette.shirt, true);
+    drawArm(ctx, 8 * u, (11 + armSwing * 0.4) * u, armLift, u, o.palette.shirt, false);
 
     // Hands
-    ctx.fillStyle = '#FFFFFF';
-    ctx.beginPath();
-    ctx.arc((-11 - armSwing * 0.4) * u, (-16 + Math.abs(armSwing) * 0.2) * u, 2.6 * u, 0, Math.PI * 2);
-    ctx.arc((11 + armSwing * 0.4) * u, (-16 + Math.abs(armSwing) * 0.2) * u, 2.6 * u, 0, Math.PI * 2);
-    ctx.fill();
+    drawHand(ctx, (-11 - armSwing * 0.4) * u, handLift, u, true);
+    drawHand(ctx, (11 + armSwing * 0.4) * u, handLift, u, false);
 
     // Overall straps + button
     ctx.strokeStyle = o.palette.overalls;
@@ -3196,25 +3194,93 @@ function drawMarioSprite(ctx, o) {
 
     // --- Head ---
     const headY = -32 * u;
-    ctx.fillStyle = o.palette.skin;
     ctx.beginPath();
     ctx.arc(0, headY, 8 * u, 0, Math.PI * 2);
-    ctx.fill();
+    // Lightly modelled: a face carries its expression in small dark shapes, and
+    // shading it as hard as a chest turns all of them into one brown mass.
+    fillModelled(ctx, o.palette.skin, headY - 8 * u, 16 * u, 0.45);
 
-    // Ear
+    drawFace(ctx, headY, u, o.palette);
+    drawCap(ctx, headY, u, o.palette, o.direction);
+
+    ctx.restore();   // the walking bob and the skid lean
+    ctx.restore();
+}
+
+/** The far limb is the same limb, painted into its own shadow. */
+function drawLeg(ctx, hipX, footX, u, color, far) {
+    ctx.beginPath();
+    ctx.moveTo(hipX, -10 * u);
+    ctx.lineTo(footX, -2 * u);
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    if (far) {
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.stroke();
+    }
+}
+
+function drawShoe(ctx, x, u, far) {
+    ctx.beginPath();
+    ctx.ellipse(x, -1.5 * u, 5 * u, 2.6 * u, 0, 0, Math.PI * 2);
+    ctx.fillStyle = far ? '#3F2913' : '#5C3C1C';
+    ctx.fill();
+    if (!far) {
+        // A lit strip along the top of the near shoe, where a boot catches the
+        // light - the one place on the sprite the ground reflects back up.
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+        ctx.beginPath();
+        ctx.ellipse(x, -2.4 * u, 4 * u, 1 * u, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawArm(ctx, shoulderX, handX, lift, u, color, far) {
+    ctx.beginPath();
+    ctx.moveTo(shoulderX, -24 * u);
+    ctx.lineTo(handX, lift);
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    if (far) {
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.stroke();
+    }
+}
+
+function drawHand(ctx, x, y, u, far) {
+    ctx.beginPath();
+    ctx.arc(x, y, 2.6 * u, 0, Math.PI * 2);
+    ctx.fillStyle = far ? '#C9CCD4' : '#FFFFFF';
+    ctx.fill();
+}
+
+/** Ear, nose, moustache, eye and the shadow the cap brim throws over it. */
+function drawFace(ctx, headY, u, palette) {
+    ctx.fillStyle = palette.skin;
     ctx.beginPath();
     ctx.arc(-6 * u, headY + 1 * u, 2.4 * u, 0, Math.PI * 2);
     ctx.fill();
 
-    // Nose
+    // Nose, with its own highlight: it is the part of the face that sticks out
+    // furthest, so it is the part the light finds first.
     ctx.beginPath();
     ctx.arc(6.5 * u, headY + 1 * u, 3 * u, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    ctx.arc(6 * u, headY, 1.5 * u, 0, Math.PI * 2);
+    ctx.fill();
 
-    // Moustache
+    // Moustache, in two lobes with a parting and a lit top edge. One flat
+    // ellipse of brown was the single thing making the lower face read as mud.
     ctx.fillStyle = '#4A2C0F';
     ctx.beginPath();
-    ctx.ellipse(4 * u, headY + 3.5 * u, 4.5 * u, 2 * u, 0, 0, Math.PI * 2);
+    ctx.ellipse(2.4 * u, headY + 3.8 * u, 2.7 * u, 1.9 * u, 0.15, 0, Math.PI * 2);
+    ctx.ellipse(6 * u, headY + 3.6 * u, 2.6 * u, 1.8 * u, -0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    ctx.beginPath();
+    ctx.ellipse(4 * u, headY + 2.4 * u, 3.6 * u, 0.7 * u, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Eye
@@ -3227,35 +3293,60 @@ function drawMarioSprite(ctx, o) {
     ctx.ellipse(3.6 * u, headY - 2 * u, 1 * u, 1.8 * u, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Sideburn
+    // Sideburn, narrower than the moustache so the cheek still reads as skin
     ctx.fillStyle = '#4A2C0F';
     ctx.beginPath();
-    ctx.ellipse(-4 * u, headY + 1 * u, 2.4 * u, 3.4 * u, 0, 0, Math.PI * 2);
+    ctx.ellipse(-4.2 * u, headY + 1 * u, 1.9 * u, 3.4 * u, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // --- Cap ---
-    ctx.fillStyle = o.palette.shirt;
+    // The brim's shadow across the forehead, clipped to the head so it follows
+    // the skull rather than sitting on it as a band.
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, headY, 8 * u, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(30, 10, 0, 0.22)';
+    ctx.fillRect(-8 * u, headY - 8 * u, 16 * u, 4 * u);
+    ctx.restore();
+}
+
+function drawCap(ctx, headY, u, palette, direction) {
     ctx.beginPath();
     ctx.arc(0, headY - 3 * u, 8.4 * u, Math.PI, 0);
-    ctx.fill();
+    fillModelled(ctx, palette.shirt, headY - 11.4 * u, 8.4 * u, 0.6);
+
+    // Peak and the band it sits on, shaded a touch darker than the crown: they
+    // face down and away from the light.
+    ctx.fillStyle = palette.shirt;
     ctx.beginPath();
     ctx.ellipse(6 * u, headY - 3.5 * u, 7 * u, 2.4 * u, 0, Math.PI, 0);
     ctx.fill();
-    ctx.fillRect(-0.5 * u, -3.5 * u + headY, 12 * u, 2 * u);
+    ctx.fillRect(-0.5 * u, headY - 3.5 * u, 12 * u, 2 * u);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+    ctx.beginPath();
+    ctx.ellipse(6 * u, headY - 3.5 * u, 7 * u, 2.4 * u, 0, Math.PI, 0);
+    ctx.fill();
+
+    // A lit edge along the crown
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 1.2 * u;
+    ctx.beginPath();
+    ctx.arc(0, headY - 3 * u, 7.8 * u, Math.PI * 1.08, Math.PI * 1.75);
+    ctx.stroke();
 
     // Cap badge
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
     ctx.arc(-0.5 * u, headY - 6 * u, 3.2 * u, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = o.palette.shirt;
+    ctx.fillStyle = palette.shirt;
     ctx.font = `bold ${4.6 * u}px "Trebuchet MS", Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     // Un-mirror just the badge so the letter never reads backwards
-    ctx.scale(o.direction < 0 ? -1 : 1, 1);
-    ctx.fillText('M', (o.direction < 0 ? 0.5 : -0.5) * u, headY - 5.6 * u);
-
+    ctx.save();
+    ctx.scale(direction < 0 ? -1 : 1, 1);
+    ctx.fillText('M', (direction < 0 ? 0.5 : -0.5) * u, headY - 5.6 * u);
     ctx.restore();
 }
 
@@ -3590,28 +3681,45 @@ class Enemy {
         const cx = screenX + this.width / 2;
         const waddle = this.alive ? Math.sin(this.animTime * 0.18) * 2 : 0;
 
-        // Feet
-        ctx.fillStyle = '#5C3C1C';
+        // Feet - the trailing one in its own shadow, like the player's
+        ctx.fillStyle = '#3F2913';
         ctx.beginPath();
         ctx.ellipse(cx - 8 + waddle, screenY + this.height - 3, 6, 3.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#5C3C1C';
+        ctx.beginPath();
         ctx.ellipse(cx + 8 - waddle, screenY + this.height - 3, 6, 3.5, 0, 0, Math.PI * 2);
         ctx.fill();
 
         // Stem / body
-        ctx.fillStyle = '#F5DEB3';
+        const stemTop = screenY + this.height / 2.6;
         ctx.beginPath();
-        ctx.roundRect(cx - 8, screenY + this.height / 2.6, 16, this.height / 1.9, 4);
-        ctx.fill();
+        ctx.roundRect(cx - 8, stemTop, 16, this.height / 1.9, 4);
+        fillModelled(ctx, '#F5DEB3', stemTop, this.height / 1.9, 0.8);
 
         // Mushroom cap
+        const capBase = screenY + this.height / 2.4;
         const capGradient = ctx.createLinearGradient(0, screenY, 0, screenY + this.height / 2);
         capGradient.addColorStop(0, '#E07B39');
         capGradient.addColorStop(1, '#8B4513');
         ctx.fillStyle = capGradient;
         ctx.beginPath();
-        ctx.ellipse(cx, screenY + this.height / 2.4, this.width / 2, this.height / 2.6, 0, Math.PI, 0);
+        ctx.ellipse(cx, capBase, this.width / 2, this.height / 2.6, 0, Math.PI, 0);
         ctx.fill();
-        ctx.fillRect(cx - this.width / 2, screenY + this.height / 2.4 - 1, this.width, 3);
+        ctx.fillRect(cx - this.width / 2, capBase - 1, this.width, 3);
+
+        // The cap throws a shadow onto the stem it overhangs, and catches the
+        // light along its own crown. Between them the cap stops being a decal
+        // painted on the front of the body.
+        ctx.fillStyle = 'rgba(60, 30, 10, 0.3)';
+        ctx.beginPath();
+        ctx.ellipse(cx, capBase + 3, 9, 3.5, 0, 0, Math.PI);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 225, 190, 0.45)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(cx, capBase, this.width / 2.2, this.height / 2.9, 0, Math.PI * 1.15, Math.PI * 1.75);
+        ctx.stroke();
 
         // Cap spots
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
@@ -3705,6 +3813,16 @@ class JumpingEnemy extends Enemy {
 
         drawGroundShadow(this, cx);
 
+        // Spikes along the top, behind the body so their roots are hidden by it
+        for (let i = -1; i <= 1; i++) {
+            ctx.beginPath();
+            ctx.moveTo(cx + i * 9 - 4, bottom - h + 4);
+            ctx.lineTo(cx + i * 9, bottom - h - 5);
+            ctx.lineTo(cx + i * 9 + 4, bottom - h + 4);
+            ctx.closePath();
+            fillModelled(ctx, '#C0392B', bottom - h - 5, 9);
+        }
+
         // Springy blob body
         const bodyGradient = ctx.createRadialGradient(cx - w / 5, bottom - h * 0.7, 2, cx, bottom - h / 2, w / 1.4);
         bodyGradient.addColorStop(0, '#FF9A9A');
@@ -3714,16 +3832,16 @@ class JumpingEnemy extends Enemy {
         ctx.ellipse(cx, bottom - h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Spikes along the top
-        ctx.fillStyle = '#C0392B';
-        for (let i = -1; i <= 1; i++) {
-            ctx.beginPath();
-            ctx.moveTo(cx + i * 9 - 4, bottom - h + 4);
-            ctx.lineTo(cx + i * 9, bottom - h - 5);
-            ctx.lineTo(cx + i * 9 + 4, bottom - h + 4);
-            ctx.closePath();
-            ctx.fill();
-        }
+        // A rubbery ball is glossy, and a highlight is what says so. It sits
+        // where the light is, so it also grounds the thing in the scene.
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.beginPath();
+        ctx.ellipse(cx - w / 5, bottom - h * 0.74, w / 7, h / 11, -0.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(90, 20, 20, 0.22)';
+        ctx.beginPath();
+        ctx.ellipse(cx, bottom - h * 0.16, w / 3.4, h / 10, 0, 0, Math.PI * 2);
+        ctx.fill();
 
         // Eyes
         const look = Math.sign(this.velocityX) || 1;
@@ -3911,10 +4029,11 @@ class TurtleEnemy extends Enemy {
             const shellGradient = ctx.createRadialGradient(cx - 5, shellCY - 5, 2, cx, shellCY, this.width / 2);
             shellGradient.addColorStop(0, '#4CAF50');
             shellGradient.addColorStop(1, this.shellColor);
-            ctx.fillStyle = shellGradient;
             ctx.beginPath();
             ctx.ellipse(cx, shellCY, this.width / 2.1, shellHeight / 2, 0, 0, Math.PI * 2);
-            ctx.fill();
+            // Clipped to the shell, so a tucked-in turtle stays inside its own
+            // outline - which is exactly what the artwork suite checks.
+            fillModelled(ctx, shellGradient, shellCY - shellHeight / 2, shellHeight, 0.7);
 
             // Shell plates rotate while sliding
             ctx.save();
@@ -3965,15 +4084,19 @@ class TurtleEnemy extends Enemy {
         const look = Math.sign(this.velocityX) || 1;
         const legSwing = Math.sin(this.animTime * 0.16) * 4;
 
-        // Legs
-        ctx.strokeStyle = '#66BB6A';
+        // Legs, the trailing one darker so the pair reads as two legs and not
+        // as one wide one
         ctx.lineWidth = 4;
         ctx.lineCap = 'round';
+        ctx.strokeStyle = '#57A85C';
         ctx.beginPath();
-        ctx.moveTo(cx - 7, screenY + this.height * 0.72);
-        ctx.lineTo(cx - 9 + legSwing, screenY + this.height - 2);
-        ctx.moveTo(cx + 7, screenY + this.height * 0.72);
-        ctx.lineTo(cx + 9 - legSwing, screenY + this.height - 2);
+        ctx.moveTo(cx - look * 7, screenY + this.height * 0.72);
+        ctx.lineTo(cx - look * 9 + legSwing, screenY + this.height - 2);
+        ctx.stroke();
+        ctx.strokeStyle = '#66BB6A';
+        ctx.beginPath();
+        ctx.moveTo(cx + look * 7, screenY + this.height * 0.72);
+        ctx.lineTo(cx + look * 9 - legSwing, screenY + this.height - 2);
         ctx.stroke();
 
         // Body parts stack back to front: neck, then shell over its root, then
@@ -3995,10 +4118,11 @@ class TurtleEnemy extends Enemy {
         const shellGradient = ctx.createRadialGradient(shellCX - 4, shellCY - 6, 2, shellCX, shellCY, shellRX * 1.4);
         shellGradient.addColorStop(0, '#4CAF50');
         shellGradient.addColorStop(1, this.shellColor);
-        ctx.fillStyle = shellGradient;
         ctx.beginPath();
         ctx.ellipse(shellCX, shellCY, shellRX, shellRY, 0, 0, Math.PI * 2);
-        ctx.fill();
+        fillModelled(ctx, shellGradient, shellCY - shellRY, shellRY * 2, 0.7);
+        ctx.beginPath();
+        ctx.ellipse(shellCX, shellCY, shellRX, shellRY, 0, 0, Math.PI * 2);
         ctx.strokeStyle = '#F5DEB3';
         ctx.lineWidth = 2.5;
         ctx.stroke();
@@ -4012,11 +4136,12 @@ class TurtleEnemy extends Enemy {
             ctx.fill();
         }
 
-        // Head, clear of the shell's leading edge
-        ctx.fillStyle = '#8BC34A';
+        // Head, clear of the shell's leading edge. Barely modelled: the artwork
+        // suite finds this head by scanning for light green past the shell, and
+        // a head shaded as hard as the shell stops being light green.
         ctx.beginPath();
         ctx.ellipse(headX, headY, 7.5, 6.5, 0, 0, Math.PI * 2);
-        ctx.fill();
+        fillModelled(ctx, '#8BC34A', headY - 6.5, 13, 0.4);
 
         // Snout
         ctx.fillStyle = '#A5D96A';
@@ -4399,10 +4524,9 @@ class PowerUp {
             ctx.fill();
         } else {
             // Stem
-            ctx.fillStyle = '#FFF3D6';
             ctx.beginPath();
             ctx.roundRect(cx - 7, cy, 14, this.height / 2 - 1, 3);
-            ctx.fill();
+            fillModelled(ctx, '#FFF3D6', cy, this.height / 2 - 1, 0.8);
 
             // Eyes
             ctx.fillStyle = '#000';
@@ -4420,6 +4544,18 @@ class PowerUp {
             ctx.ellipse(cx, cy, this.width / 2, this.height / 2, 0, Math.PI, 0);
             ctx.fill();
             ctx.fillRect(cx - this.width / 2, cy - 1, this.width, 2);
+
+            // The same trick as the enemy's cap: a lit crown, and a shadow
+            // thrown down onto the stem it overhangs.
+            ctx.strokeStyle = 'rgba(255, 220, 220, 0.5)';
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, this.width / 2.3, this.height / 2.3, 0, Math.PI * 1.15, Math.PI * 1.75);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(120, 40, 30, 0.28)';
+            ctx.beginPath();
+            ctx.ellipse(cx, cy + 2, 7, 2.6, 0, 0, Math.PI);
+            ctx.fill();
 
             // Spots
             ctx.fillStyle = '#FFF3D6';
@@ -6876,27 +7012,78 @@ function invalidateGradients() {
     gradientCache.clear();
 }
 
+// Relief gradients, cached per context and per height. A gradient belongs to
+// the context that created it, and the player sprite is sometimes drawn to an
+// off-screen canvas of its own, so one shared cache will not do.
+const reliefGradients = new WeakMap();
+
 /**
  * Lit along the top, falling into shadow at the base. Painted over a shape
  * that has already been filled - and clipped to it - so one routine models a
- * hill, a pillar, a stalagmite and a cloud without knowing any of their
- * colours. The gradient is cached per height, of which there are a handful.
+ * hill, a pillar, a stalagmite, a cloud and a character's chest without
+ * knowing any of their colours. That last part is what makes it worth
+ * sharing: a player wearing a star changes colour every frame, and the
+ * shading does not care.
+ *
+ * @param {CanvasRenderingContext2D} target where to paint
+ * @param {number} strength 1 for full modelling, less for a softer body
  */
-function paintRelief(left, topY, width, height) {
-    const span = Math.max(1, Math.round(height));
-    const grad = cachedGradient(`relief:${span}`, () => {
-        const g = ctx.createLinearGradient(0, 0, 0, span);
-        g.addColorStop(0, 'rgba(255, 255, 255, 0.22)');
-        g.addColorStop(0.45, 'rgba(255, 255, 255, 0.04)');
-        g.addColorStop(1, 'rgba(0, 0, 0, 0.26)');
-        return g;
-    });
+function reliefGradient(target, span) {
+    let cache = reliefGradients.get(target);
+    if (!cache) {
+        cache = new Map();
+        reliefGradients.set(target, cache);
+    }
 
-    ctx.save();
-    ctx.translate(0, topY);
-    ctx.fillStyle = grad;
-    ctx.fillRect(left, 0, width, span);
-    ctx.restore();
+    let grad = cache.get(span);
+    if (!grad) {
+        grad = target.createLinearGradient(0, 0, 0, span);
+        grad.addColorStop(0, 'rgba(255, 255, 255, 0.22)');
+        grad.addColorStop(0.45, 'rgba(255, 255, 255, 0.04)');
+        grad.addColorStop(1, 'rgba(0, 0, 0, 0.26)');
+        cache.set(span, grad);
+    }
+    return grad;
+}
+
+/**
+ * Lays the light over a box, for a caller that has already clipped to the
+ * shape it wants modelled. The gradient is built once at the origin and moved
+ * into place by the transform, which is what keeps it cacheable: a path is
+ * fixed in device space the moment it is built, so translating afterwards
+ * moves the gradient and not the shape.
+ */
+function paintRelief(target, left, topY, width, height, strength = 1) {
+    const span = Math.max(1, Math.round(height));
+    target.save();
+    // Multiplied, not assigned: a sprite mid-flash is already half see-through
+    // and its shading has to flash with it.
+    target.globalAlpha *= strength;
+    target.translate(0, topY);
+    target.fillStyle = reliefGradient(target, span);
+    target.fillRect(left, 0, width, span);
+    target.restore();
+}
+
+/**
+ * Fills the path the caller has built and then models it, by filling that same
+ * path a second time with the light over it. Every solid body in the game is
+ * drawn this way.
+ *
+ * Filling twice rather than filling once and clipping is not a micro-
+ * optimisation: a clip per body part put nine characters - the multiplayer
+ * worst case - at two and a half times the cost of drawing them flat.
+ */
+function fillModelled(target, color, topY, height, strength = 1) {
+    target.fillStyle = color;
+    target.fill();
+
+    target.save();
+    target.globalAlpha *= strength;
+    target.translate(0, topY);
+    target.fillStyle = reliefGradient(target, Math.max(1, Math.round(height)));
+    target.fill();
+    target.restore();
 }
 
 // How far the horizon wash reaches above and below the horizon itself.
@@ -7361,7 +7548,7 @@ function drawHill(x, hill, horizon, snowy, far) {
     // Snow belongs on snowy peaks. It used to go on every far hill, which put
     // white caps on the hills behind a summer beach.
     if (snowy) paintSnowLine(x, baseY, w, h);
-    paintRelief(x - w, baseY - h, w * 2, h);
+    paintRelief(ctx, x - w, baseY - h, w * 2, h);
     ctx.restore();
 }
 
@@ -7412,7 +7599,7 @@ function drawCaveTeeth(x, piece, baseY, far) {
     ctx.fill();
     ctx.save();
     ctx.clip();
-    paintRelief(x - w, baseY - h, w * 2, h);
+    paintRelief(ctx, x - w, baseY - h, w * 2, h);
     ctx.restore();
 
     ctx.beginPath();
@@ -7423,7 +7610,7 @@ function drawCaveTeeth(x, piece, baseY, far) {
     ctx.fill();
     ctx.save();
     ctx.clip();
-    paintRelief(x - w, topY, w * 2, h * 0.75);
+    paintRelief(ctx, x - w, topY, w * 2, h * 0.75);
     ctx.restore();
 
     // A wet gleam down the lit face of the nearer rock
@@ -7465,7 +7652,7 @@ function drawPillar(x, piece, baseY, far) {
     ctx.beginPath();
     ctx.rect(left, baseY - h, w, h);
     ctx.clip();
-    paintRelief(left, baseY - h, w, h);
+    paintRelief(ctx, left, baseY - h, w, h);
 
     // Coursed stone, so a buttress reads as masonry and not as a bar
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
@@ -7522,7 +7709,7 @@ function drawBank(x, piece, baseY, far) {
     ctx.ellipse(x + w * 0.12, baseY, w * 0.3, h * 0.82, 0, Math.PI, 0);
     ctx.fill();
     ctx.clip();
-    paintRelief(x - w, baseY - h, w * 2, h);
+    paintRelief(ctx, x - w, baseY - h, w * 2, h);
     ctx.restore();
 }
 
@@ -7569,7 +7756,7 @@ function drawCloudBody(style) {
 
     ctx.save();
     ctx.clip();
-    paintRelief(-30, -40, 120, 74);
+    paintRelief(ctx, -30, -40, 120, 74);
     ctx.restore();
 }
 

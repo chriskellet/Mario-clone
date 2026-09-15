@@ -1348,7 +1348,90 @@
             assert(stray < 20 * dpr, `${stray} pixels drawn outside a tucked-in shell`);
         });
 
-        // Test Suite 19: Scenery and atmosphere
+        // Test Suite 19: Character modelling
+        const modelTests = new TestRunner('Character Modelling');
+
+        // Draws the idle sprite to a scratch canvas and hands back its pixels.
+        // Idle, because that is the pose whose silhouette the hitbox suite
+        // holds to the collision box.
+        function spritePixels() {
+            const BOX = 200, ox = 80, oy = 80;
+            const c = document.createElement('canvas');
+            c.width = BOX; c.height = BOX;
+            const g = c.getContext('2d');
+            drawMarioSprite(g, {
+                x: ox, y: oy, width: CONFIG.PLAYER_WIDTH, height: CONFIG.PLAYER_SIZE,
+                big: true, direction: 1, palette: PLAYER_COLORS[0], alpha: 1, squash: 1,
+                onGround: true, velocityY: 0, walkPhase: 0, moving: false, skidding: false,
+            });
+            const data = g.getImageData(0, 0, BOX, BOX).data;
+            // Mean brightness of the opaque pixels in a box, in sprite units:
+            // u = 1 at this size, with the feet on the origin.
+            return (left, top, width, height) => {
+                let total = 0, count = 0;
+                for (let y = top; y < top + height; y++) {
+                    for (let x = left; x < left + width; x++) {
+                        const i = ((y + oy + 40) * BOX + (x + ox + CONFIG.PLAYER_WIDTH / 2)) * 4;
+                        if (data[i + 3] < 200) continue;
+                        total += (data[i] + data[i + 1] + data[i + 2]) / 3;
+                        count++;
+                    }
+                }
+                assert(count > 4, `nothing drawn in the box at ${left},${top}`);
+                return total / count;
+            };
+        }
+
+        // Flat fills are what made the cast read as cardboard. Every solid body
+        // is filled and then modelled, lit at the top and shaded at the base.
+        modelTests.test('the body is lit from above, not filled flat', () => {
+            const brightness = spritePixels();
+            const top = brightness(-3, -19, 6, 4);      // upper chest of the overalls
+            const bottom = brightness(-3, -11, 6, 3);   // and its lower hem
+            assert(top > bottom + 12,
+                `the body is flat: ${Math.round(top)} at the top against ${Math.round(bottom)} at the hem`);
+        });
+
+        // The far arm and the far leg are painted into their own shadow, which
+        // is most of what separates a limb from the body behind it.
+        modelTests.test('the trailing hand is darker than the leading one', () => {
+            const brightness = spritePixels();
+            const near = brightness(9, -18, 5, 5);
+            const far = brightness(-14, -18, 5, 5);
+            assert(near > far + 10,
+                `both hands are the same shade: ${Math.round(near)} against ${Math.round(far)}`);
+        });
+
+        modelTests.test('drawing a character leaves its canvas as it found it', () => {
+            const c = document.createElement('canvas');
+            c.width = 120; c.height = 120;
+            const g = c.getContext('2d');
+            const save = g.save.bind(g);
+            const restore = g.restore.bind(g);
+            let depth = 0;
+            g.save = () => { depth++; save(); };
+            g.restore = () => { depth--; restore(); };
+
+            drawMarioSprite(g, {
+                x: 40, y: 40, width: CONFIG.PLAYER_WIDTH, height: CONFIG.PLAYER_SIZE,
+                big: true, direction: -1, palette: PLAYER_COLORS[2], alpha: 0.5, squash: 1.2,
+                onGround: false, velocityY: -8, walkPhase: 2, moving: true, skidding: true,
+            });
+
+            assertEqual(depth, 0, `${depth} canvas states left behind by one sprite`);
+        });
+
+        // A gradient belongs to the context that made it, and the sprite is
+        // drawn to an off-screen canvas by these very tests.
+        modelTests.test('relief gradients are cached per canvas', () => {
+            const a = document.createElement('canvas').getContext('2d');
+            const b = document.createElement('canvas').getContext('2d');
+            assert(reliefGradient(a, 20) === reliefGradient(a, 20), 'the gradient was rebuilt');
+            assert(reliefGradient(a, 20) !== reliefGradient(b, 20), 'one canvas got another canvas\'s gradient');
+            assert(reliefGradient(a, 20) !== reliefGradient(a, 40), 'two heights shared one gradient');
+        });
+
+        // Test Suite 20: Scenery and atmosphere
         const sceneryTests = new TestRunner('Scenery and Atmosphere');
 
         // Every renderer in the backdrop reads its colours out of the theme, so
@@ -1498,7 +1581,7 @@
             assertEqual(deepestUnwind, 0, 'a frame restored a canvas state it never saved');
         });
 
-        // Test Suite 20: Power-up safety
+        // Test Suite 21: Power-up safety
         const powerUpTests = new TestRunner('Power-up Safety');
 
         powerUpTests.test('a power-up turns back at a ledge', () => {
@@ -2784,6 +2867,7 @@
                 hitboxTests,
                 populationTests,
                 artTests,
+                modelTests,
                 sceneryTests,
                 powerUpTests,
                 rideTests,

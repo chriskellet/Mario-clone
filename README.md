@@ -347,11 +347,22 @@ decide everyone else is asleep and seize the role.
   their own depth so near ones sweep past and far ones barely shift; and a
   vignette in the theme's own colour. A new world gets its own weather by
   filling in six fields.
-- **Shape before colour.** Backdrop pieces, clouds and cloud banks are filled
-  in their theme colour and then modelled by one shared routine — lit along the
-  top, falling into shadow at the base, clipped to the shape it is modelling —
-  so a hill, a buttress, a stalagmite and a cloud all catch the light the same
-  way without any of them knowing what colour they are.
+- **Shape before colour.** Every solid body in the game — a hill, a buttress, a
+  stalagmite, a cloud, a chest, a cap, a shell — is filled flat and then
+  modelled by one shared routine: lit along the top, falling into shadow at the
+  base. None of them knows what colour it is, which is the point. A player
+  wearing a star changes colour every frame and the shading does not care.
+  Bodies are filled twice rather than filled once and clipped: a clip per body
+  part put nine characters, the multiplayer worst case, at two and a half times
+  the cost of drawing them flat.
+- **Depth inside a sprite.** The trailing arm, hand, leg and foot are painted a
+  shade darker than the leading ones, the cap's peak throws a shadow across the
+  forehead, and a mushroom's cap throws one down onto the stem it overhangs.
+  Flat colour is what makes a character read as a cut-out; what fixes it is not
+  more detail but knowing which parts are further away.
+- **Weight in the animation.** Jumps stretch and landings squash, the torso
+  rides over planted feet as it walks, and a skid leans into the stop — so the
+  character has mass before the dust does.
 - **Collision courtesies.** Clipping a few pixels of a block's corner on the
   way up slides you past it instead of killing the jump, and resolution always
   pushes clear of the deepest overlap so nothing ends up embedded in a stack of
@@ -375,16 +386,24 @@ Serve the directory over HTTP and open `index.html`:
 python3 -m http.server 8000
 ```
 
-Open `tests.html` in a browser to run the test suite — 166 checks covering
+Open `tests.html` in a browser to run the test suite — 170 checks covering
 geometry helpers, the collision resolver and its corner-correction behaviour,
 level construction, block and power-up behaviour, the death and respawn
 sequence, enemy behaviour at ledges, enemy population limits, fair spawning,
 hitbox fidelity against the rendered sprite, enemy artwork (the turtle's head
-and neck are scanned for in the rendered frame), scenery and atmosphere,
-power-up safety, moving platforms, springs and hazards, the multiplayer round
-clock, territory capture, coin claims and their expiry, what happens when the
-server refuses a subscription, and shadow casting, alongside DOM and
-configuration checks.
+and neck are scanned for in the rendered frame), character modelling, scenery
+and atmosphere, power-up safety, moving platforms, springs and hazards, the
+multiplayer round clock, territory capture, coin claims and their expiry, what
+happens when the server refuses a subscription, and shadow casting, alongside
+DOM and configuration checks.
+
+The character suite draws the sprite to a scratch canvas and reads it back:
+the chest has to be brighter at the top than at the hem, and the trailing hand
+darker than the leading one, so the modelling and the depth cue cannot quietly
+be lost to a refactor. It also checks that drawing a character leaves the
+canvas state as it found it, and that relief gradients are cached per canvas —
+a gradient belongs to the context that made it, and these tests draw the sprite
+to a canvas of their own.
 
 The scenery suite holds the backdrop to the things that are easy to get wrong
 and hard to notice: every theme has to describe its own atmosphere, the
