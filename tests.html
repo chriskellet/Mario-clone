@@ -1348,7 +1348,240 @@
             assert(stray < 20 * dpr, `${stray} pixels drawn outside a tucked-in shell`);
         });
 
-        // Test Suite 19: Power-up safety
+        // Test Suite 19: Character modelling
+        const modelTests = new TestRunner('Character Modelling');
+
+        // Draws the idle sprite to a scratch canvas and hands back its pixels.
+        // Idle, because that is the pose whose silhouette the hitbox suite
+        // holds to the collision box.
+        function spritePixels() {
+            const BOX = 200, ox = 80, oy = 80;
+            const c = document.createElement('canvas');
+            c.width = BOX; c.height = BOX;
+            const g = c.getContext('2d');
+            drawMarioSprite(g, {
+                x: ox, y: oy, width: CONFIG.PLAYER_WIDTH, height: CONFIG.PLAYER_SIZE,
+                big: true, direction: 1, palette: PLAYER_COLORS[0], alpha: 1, squash: 1,
+                onGround: true, velocityY: 0, walkPhase: 0, moving: false, skidding: false,
+            });
+            const data = g.getImageData(0, 0, BOX, BOX).data;
+            // Mean brightness of the opaque pixels in a box, in sprite units:
+            // u = 1 at this size, with the feet on the origin.
+            return (left, top, width, height) => {
+                let total = 0, count = 0;
+                for (let y = top; y < top + height; y++) {
+                    for (let x = left; x < left + width; x++) {
+                        const i = ((y + oy + 40) * BOX + (x + ox + CONFIG.PLAYER_WIDTH / 2)) * 4;
+                        if (data[i + 3] < 200) continue;
+                        total += (data[i] + data[i + 1] + data[i + 2]) / 3;
+                        count++;
+                    }
+                }
+                assert(count > 4, `nothing drawn in the box at ${left},${top}`);
+                return total / count;
+            };
+        }
+
+        // Flat fills are what made the cast read as cardboard. Every solid body
+        // is filled and then modelled, lit at the top and shaded at the base.
+        modelTests.test('the body is lit from above, not filled flat', () => {
+            const brightness = spritePixels();
+            const top = brightness(-3, -19, 6, 4);      // upper chest of the overalls
+            const bottom = brightness(-3, -11, 6, 3);   // and its lower hem
+            assert(top > bottom + 12,
+                `the body is flat: ${Math.round(top)} at the top against ${Math.round(bottom)} at the hem`);
+        });
+
+        // The far arm and the far leg are painted into their own shadow, which
+        // is most of what separates a limb from the body behind it.
+        modelTests.test('the trailing hand is darker than the leading one', () => {
+            const brightness = spritePixels();
+            const near = brightness(9, -18, 5, 5);
+            const far = brightness(-14, -18, 5, 5);
+            assert(near > far + 10,
+                `both hands are the same shade: ${Math.round(near)} against ${Math.round(far)}`);
+        });
+
+        modelTests.test('drawing a character leaves its canvas as it found it', () => {
+            const c = document.createElement('canvas');
+            c.width = 120; c.height = 120;
+            const g = c.getContext('2d');
+            const save = g.save.bind(g);
+            const restore = g.restore.bind(g);
+            let depth = 0;
+            g.save = () => { depth++; save(); };
+            g.restore = () => { depth--; restore(); };
+
+            drawMarioSprite(g, {
+                x: 40, y: 40, width: CONFIG.PLAYER_WIDTH, height: CONFIG.PLAYER_SIZE,
+                big: true, direction: -1, palette: PLAYER_COLORS[2], alpha: 0.5, squash: 1.2,
+                onGround: false, velocityY: -8, walkPhase: 2, moving: true, skidding: true,
+            });
+
+            assertEqual(depth, 0, `${depth} canvas states left behind by one sprite`);
+        });
+
+        // A gradient belongs to the context that made it, and the sprite is
+        // drawn to an off-screen canvas by these very tests.
+        modelTests.test('relief gradients are cached per canvas', () => {
+            const a = document.createElement('canvas').getContext('2d');
+            const b = document.createElement('canvas').getContext('2d');
+            assert(reliefGradient(a, 20) === reliefGradient(a, 20), 'the gradient was rebuilt');
+            assert(reliefGradient(a, 20) !== reliefGradient(b, 20), 'one canvas got another canvas\'s gradient');
+            assert(reliefGradient(a, 20) !== reliefGradient(a, 40), 'two heights shared one gradient');
+        });
+
+        // Test Suite 20: Scenery and atmosphere
+        const sceneryTests = new TestRunner('Scenery and Atmosphere');
+
+        // Every renderer in the backdrop reads its colours out of the theme, so
+        // a world that forgets a field silently loses a whole layer.
+        sceneryTests.test('every theme describes its own atmosphere', () => {
+            const kinds = ['pollen', 'spray', 'motes', 'wisps', 'snow', 'embers'];
+            const lights = ['sun', 'above', 'below'];
+            const styles = ['puff', 'wisp', 'smoke'];
+
+            for (const [name, t] of Object.entries(THEMES)) {
+                assert(typeof t.haze === 'string', `${name} has no horizon haze`);
+                assert(typeof t.vignette === 'string', `${name} has no vignette`);
+                assert(t.ridge === null || typeof t.ridge === 'string', `${name} has a bad ridge`);
+                assert(t.clouds === null || styles.includes(t.cloudStyle), `${name} has a bad cloud style`);
+                assert(!t.shafts || lights.includes(t.shafts.kind), `${name} has a bad light kind`);
+                if (t.ambience) {
+                    assert(kinds.includes(t.ambience.kind), `${name} drifts something unknown`);
+                    assert(t.ambience.count > 0, `${name} has an empty ambience`);
+                }
+            }
+        });
+
+        sceneryTests.test('the backdrop is painted far layer first', () => {
+            initBackdrop();
+            const firstNear = hillPositions.findIndex(p => !p.far);
+            const lastFar = hillPositions.map(p => p.far).lastIndexOf(true);
+            assert(firstNear === -1 || lastFar < firstNear,
+                'a far backdrop piece is queued to paint over a near one');
+        });
+
+        sceneryTests.test('the backdrop is the same for everyone in a session', () => {
+            initBackdrop();
+            const first = JSON.stringify(hillPositions);
+            initBackdrop();
+            assertEqual(JSON.stringify(hillPositions), first,
+                'the backdrop is not deterministic, so no two players see one world');
+        });
+
+        // The bug this replaced: a snow cap went on every far hill, whatever the
+        // world, which put alpine summits on the hills behind a summer beach.
+        sceneryTests.test('only snowy peaks wear snow', () => {
+            const whitePixels = (snowy, far) => {
+                ctx.clearRect(0, 0, view.w, view.h);
+                theme = THEMES.coast;
+                drawHill(view.w / 2, { x: 0, scale: 1, far, tone: 0.5 }, view.h * 0.7, snowy, far);
+                const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                let white = 0;
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i + 3] > 60 && data[i] > 235 && data[i + 1] > 235 && data[i + 2] > 235) white++;
+                }
+                return white;
+            };
+
+            // Both layers: it was the far one that used to wear snow regardless.
+            const bareNear = whitePixels(false, false);
+            const bareFar = whitePixels(false, true);
+            const snowy = whitePixels(true, false);
+            theme = THEMES.overworld;
+            assert(bareNear < 50, `${bareNear} pixels of snow on a near hill that is not snowy`);
+            assert(bareFar < 50, `${bareFar} pixels of snow on a far hill that is not snowy`);
+            assert(snowy > bareNear + 500, 'a snowy peak has no snow on it');
+        });
+
+        sceneryTests.test('the weather is seeded inside the frame', () => {
+            theme = THEMES.ice;
+            initAmbience();
+            assertEqual(ambience.motes.length, THEMES.ice.ambience.count, 'wrong number of motes');
+            const stray = ambience.motes.filter(m =>
+                m.x < 0 || m.x > view.w || m.y < 0 || m.y > view.h);
+            theme = THEMES.overworld;
+            assertEqual(stray.length, 0, `${stray.length} motes seeded outside the frame`);
+        });
+
+        sceneryTests.test('a mote that drifts off the frame comes back on', () => {
+            const escaped = { x: view.w + 200, y: -200 };
+            wrapMote(escaped);
+            assert(escaped.x <= view.w + 40 && escaped.x >= -40, `x escaped to ${escaped.x}`);
+            assert(escaped.y <= view.h + 40 && escaped.y >= -40, `y escaped to ${escaped.y}`);
+        });
+
+        // Depth is the whole point of the layer: a mote close to the camera has
+        // to sweep past faster than one further away.
+        sceneryTests.test('drifting motes move against the camera by their depth', () => {
+            theme = THEMES.cave;
+            initAmbience();
+
+            // Two motes side by side in the middle of the frame, one close to
+            // the camera and one far off - far enough from the edges that
+            // neither wraps around during the step being measured.
+            const mote = (depth) => ({ x: view.w / 2, y: view.h / 2, depth, size: 2, phase: 0, drift: 0.5 });
+            const near = mote(0.9);
+            const far = mote(0.2);
+            ambience.motes = [near, far];
+            ambience.cameraX = gameState.camera.x;
+            ambience.cameraY = gameState.camera.y;
+
+            gameState.camera.x += 60;
+            updateAmbience();
+            gameState.camera.x -= 60;
+            theme = THEMES.overworld;
+
+            assert(view.w / 2 - near.x > view.w / 2 - far.x + 20,
+                'both motes moved with the camera by the same amount - there is no parallax');
+        });
+
+        sceneryTests.test('viewport gradients are built once and dropped on a change', () => {
+            invalidateGradients();
+            const first = cachedGradient('test', () => ctx.createLinearGradient(0, 0, 0, 10));
+            assert(cachedGradient('test', () => null) === first, 'the gradient was rebuilt');
+            invalidateGradients();
+            assert(cachedGradient('test', () => ctx.createLinearGradient(0, 0, 0, 10)) !== first,
+                'a stale gradient survived the theme change');
+        });
+
+        sceneryTests.test('every world renders', () => {
+            for (let level = 1; level <= LEVELS.length; level++) {
+                gameState.level = level;
+                initLevel();
+                rebuildSolids();
+                render();   // throws if a theme is missing what a renderer reads
+            }
+            gameState.level = 1;
+            initLevel();
+        });
+
+        // Canvas state is a stack, and a draw that saves without restoring
+        // corrupts every frame after it rather than its own.
+        sceneryTests.test('a frame leaves the canvas state as it found it', () => {
+            initLevel();
+            rebuildSolids();
+
+            const save = ctx.save.bind(ctx);
+            const restore = ctx.restore.bind(ctx);
+            let depth = 0;
+            let deepestUnwind = 0;
+            ctx.save = () => { depth++; save(); };
+            ctx.restore = () => { depth--; deepestUnwind = Math.min(deepestUnwind, depth); restore(); };
+
+            try {
+                render();
+            } finally {
+                delete ctx.save;
+                delete ctx.restore;
+            }
+
+            assertEqual(depth, 0, `${depth} canvas states left on the stack by one frame`);
+            assertEqual(deepestUnwind, 0, 'a frame restored a canvas state it never saved');
+        });
+
+        // Test Suite 21: Power-up safety
         const powerUpTests = new TestRunner('Power-up Safety');
 
         powerUpTests.test('a power-up turns back at a ledge', () => {
@@ -2634,6 +2867,8 @@
                 hitboxTests,
                 populationTests,
                 artTests,
+                modelTests,
+                sceneryTests,
                 powerUpTests,
                 rideTests,
                 pwaTests,

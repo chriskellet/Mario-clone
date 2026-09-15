@@ -129,6 +129,15 @@ const PLAYER_COLORS = [
 //  the brick you stand on and the tune playing over it. Every drawing routine
 //  in the game reads its colours from here rather than hard-coding them, so a
 //  new setting is a table entry and not a new renderer.
+//
+//  Atmosphere fields, all read by the ATMOSPHERE section below:
+//    haze       wash laid along the horizon, and over the far backdrop layer,
+//               so distance reads as distance rather than as a smaller shape
+//    ridge      the furthest silhouette of all, or null for no skyline
+//    cloudStyle 'puff' | 'wisp' | 'smoke' - how the cloud layer is painted
+//    shafts     { kind: 'sun' | 'above' | 'below', color } light in the air
+//    ambience   { kind, count, color, front } what is drifting past the camera
+//    vignette   the colour the corners of the frame fall away to
 // ============================================================================
 const THEMES = {
     overworld: {
@@ -149,6 +158,12 @@ const THEMES = {
         blockEdge: '#4A3113',
         oneWay: 'cloud',
         deep: ['#4A2A12', '#1B0F06'],
+        haze: 'rgba(206, 232, 255, 0.5)',
+        ridge: 'rgba(104, 146, 190, 0.32)',
+        cloudStyle: 'puff',
+        shafts: { kind: 'sun', color: 'rgba(255, 244, 198, 0.06)' },
+        ambience: { kind: 'pollen', count: 26, color: 'rgba(255, 246, 186, 0.8)' },
+        vignette: 'rgba(16, 38, 60, 0.28)',
         track: 'overworld',
     },
     coast: {
@@ -169,6 +184,12 @@ const THEMES = {
         blockEdge: '#6E5528',
         oneWay: 'cloud',
         deep: ['#1B4A63', '#08202F'],
+        haze: 'rgba(255, 224, 180, 0.52)',
+        ridge: 'rgba(86, 134, 178, 0.3)',
+        cloudStyle: 'puff',
+        shafts: { kind: 'sun', color: 'rgba(255, 216, 150, 0.05)' },
+        ambience: { kind: 'spray', count: 22, color: 'rgba(255, 255, 255, 0.7)' },
+        vignette: 'rgba(24, 48, 70, 0.26)',
         track: 'overworld',
     },
     cave: {
@@ -189,12 +210,21 @@ const THEMES = {
         blockEdge: '#1A1428',
         oneWay: 'plank',
         deep: ['#140F22', '#05030A'],
+        haze: 'rgba(42, 31, 61, 0.6)',
+        ridge: 'rgba(26, 20, 44, 0.9)',
+        cloudStyle: null,
+        shafts: { kind: 'above', color: 'rgba(150, 214, 236, 0.07)' },
+        ambience: { kind: 'motes', count: 30, color: 'rgba(148, 220, 236, 0.6)' },
+        vignette: 'rgba(0, 0, 0, 0.55)',
         track: 'cavern',
     },
     sky: {
         sky: ['#2E6FD8', '#7EB6F5', '#DDF1FF'],
         light: { kind: 'sun', core: 'rgba(255, 255, 235, 0.95)', halo: 'rgba(200, 235, 255, 0.45)' },
-        backdrop: 'none',
+        // Nothing stands on the horizon this high up, but an empty sky reads as
+        // an empty canvas: banks of distant cloud give the height somewhere to
+        // be measured against.
+        backdrop: 'cloudbank',
         far: 'rgba(255,255,255,0.4)',
         near: 'rgba(255,255,255,0.55)',
         clouds: 'rgba(255, 255, 255, 0.95)',
@@ -211,6 +241,12 @@ const THEMES = {
         blockEdge: '#8B7B5C',
         oneWay: 'cloud',
         deep: ['rgba(120, 175, 225, 0.55)', 'rgba(70, 130, 190, 0.15)'],
+        haze: 'rgba(222, 242, 255, 0.55)',
+        ridge: null,
+        cloudStyle: 'puff',
+        shafts: { kind: 'sun', color: 'rgba(255, 255, 235, 0.035)' },
+        ambience: { kind: 'wisps', count: 18, color: 'rgba(255, 255, 255, 0.5)' },
+        vignette: 'rgba(38, 78, 128, 0.24)',
         track: 'sky',
     },
     ice: {
@@ -231,6 +267,12 @@ const THEMES = {
         blockEdge: '#4E7392',
         oneWay: 'ice',
         deep: ['#16304F', '#050D1A'],
+        haze: 'rgba(127, 169, 201, 0.45)',
+        ridge: 'rgba(72, 108, 148, 0.45)',
+        cloudStyle: 'wisp',
+        shafts: { kind: 'sun', color: 'rgba(198, 228, 255, 0.07)' },
+        ambience: { kind: 'snow', count: 42, color: 'rgba(255, 255, 255, 0.85)', front: true },
+        vignette: 'rgba(4, 14, 34, 0.42)',
         track: 'sky',
     },
     castle: {
@@ -251,6 +293,12 @@ const THEMES = {
         blockEdge: '#150B08',
         oneWay: 'ember',
         deep: ['#3A0D06', '#120301'],
+        haze: 'rgba(138, 46, 8, 0.45)',
+        ridge: 'rgba(38, 16, 16, 0.85)',
+        cloudStyle: 'smoke',
+        shafts: { kind: 'below', color: 'rgba(255, 122, 30, 0.09)' },
+        ambience: { kind: 'embers', count: 28, color: 'rgba(255, 150, 60, 0.85)', front: true },
+        vignette: 'rgba(12, 0, 0, 0.55)',
         track: 'castle',
     },
 };
@@ -1836,13 +1884,19 @@ function resizeCanvas() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = true;
 
+    // Everything sized to the viewport - the sky, the vignette, the field of
+    // drifting motes - has just been invalidated by that resize.
+    invalidateGradients();
+    initAmbience();
+
     const rotateHint = document.getElementById('rotate-hint');
     if (rotateHint) rotateHint.classList.toggle('hidden', aspect > 0.85);
 }
 
-resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 150));
+// The first sizing pass runs from INITIALIZE at the foot of this file: it now
+// seeds the atmosphere too, and that state is declared further down.
 
 // ============================================================================
 //  AUDIO
@@ -3077,52 +3131,50 @@ function drawMarioSprite(ctx, o) {
         legSwing = Math.sin(o.walkPhase) * 6;
     }
 
-    ctx.strokeStyle = '#1E4C8F';
+    // The far leg and the far arm are drawn a shade darker, which is most of
+    // what stops a body of one flat colour reading as a cardboard cut-out.
+    const backX = (-5 + legSwing * 0.5) * u;
+    const frontX = (5 - legSwing * 0.5) * u;
     ctx.lineWidth = 5 * u;
     ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(-4 * u, -10 * u);
-    ctx.lineTo((-5 + legSwing * 0.5) * u, -2 * u);
-    ctx.moveTo(4 * u, -10 * u);
-    ctx.lineTo((5 - legSwing * 0.5) * u, -2 * u);
-    ctx.stroke();
+    drawLeg(ctx, -4 * u, backX, u, '#1E4C8F', true);
+    drawLeg(ctx, 4 * u, frontX, u, '#1E4C8F', false);
 
-    // Shoes
-    ctx.fillStyle = '#5C3C1C';
-    ctx.beginPath();
-    ctx.ellipse((-6 + legSwing * 0.5) * u, -1.5 * u, 5 * u, 2.6 * u, 0, 0, Math.PI * 2);
-    ctx.ellipse((6 - legSwing * 0.5) * u, -1.5 * u, 5 * u, 2.6 * u, 0, 0, Math.PI * 2);
-    ctx.fill();
+    drawShoe(ctx, (-6 + legSwing * 0.5) * u, u, true);
+    drawShoe(ctx, (6 - legSwing * 0.5) * u, u, false);
+
+    // The torso rides over planted feet: a walk without it is a pair of legs
+    // sliding under a statue.
+    ctx.save();
+    if (!airborne && o.moving) ctx.translate(0, -Math.abs(Math.sin(o.walkPhase)) * 0.9 * u);
+    // Leaning into a skid says "I am trying to stop" before the dust does.
+    if (o.skidding) {
+        ctx.translate(0, -10 * u);
+        ctx.rotate(-0.13);
+        ctx.translate(0, 10 * u);
+    }
 
     // --- Body / overalls ---
-    ctx.fillStyle = o.palette.overalls;
     ctx.beginPath();
     ctx.roundRect(-8 * u, -20 * u, 16 * u, 12 * u, 3 * u);
-    ctx.fill();
+    fillModelled(ctx, o.palette.overalls, -20 * u, 12 * u, 0.85);
 
     // Shirt (shoulders and arms)
-    ctx.fillStyle = o.palette.shirt;
     ctx.beginPath();
     ctx.roundRect(-9 * u, -26 * u, 18 * u, 8 * u, 3 * u);
-    ctx.fill();
+    fillModelled(ctx, o.palette.shirt, -26 * u, 8 * u, 0.85);
 
     // Arms
     const armSwing = o.skidding ? -7 : (o.moving && !airborne ? Math.cos(o.walkPhase) * 5 : (airborne ? -6 : 0));
-    ctx.strokeStyle = o.palette.shirt;
+    const armLift = (-17 + Math.abs(armSwing) * 0.2) * u;
+    const handLift = (-16 + Math.abs(armSwing) * 0.2) * u;
     ctx.lineWidth = 4.5 * u;
-    ctx.beginPath();
-    ctx.moveTo(-8 * u, -24 * u);
-    ctx.lineTo((-11 - armSwing * 0.4) * u, (-17 + Math.abs(armSwing) * 0.2) * u);
-    ctx.moveTo(8 * u, -24 * u);
-    ctx.lineTo((11 + armSwing * 0.4) * u, (-17 + Math.abs(armSwing) * 0.2) * u);
-    ctx.stroke();
+    drawArm(ctx, -8 * u, (-11 - armSwing * 0.4) * u, armLift, u, o.palette.shirt, true);
+    drawArm(ctx, 8 * u, (11 + armSwing * 0.4) * u, armLift, u, o.palette.shirt, false);
 
     // Hands
-    ctx.fillStyle = '#FFFFFF';
-    ctx.beginPath();
-    ctx.arc((-11 - armSwing * 0.4) * u, (-16 + Math.abs(armSwing) * 0.2) * u, 2.6 * u, 0, Math.PI * 2);
-    ctx.arc((11 + armSwing * 0.4) * u, (-16 + Math.abs(armSwing) * 0.2) * u, 2.6 * u, 0, Math.PI * 2);
-    ctx.fill();
+    drawHand(ctx, (-11 - armSwing * 0.4) * u, handLift, u, true);
+    drawHand(ctx, (11 + armSwing * 0.4) * u, handLift, u, false);
 
     // Overall straps + button
     ctx.strokeStyle = o.palette.overalls;
@@ -3142,25 +3194,93 @@ function drawMarioSprite(ctx, o) {
 
     // --- Head ---
     const headY = -32 * u;
-    ctx.fillStyle = o.palette.skin;
     ctx.beginPath();
     ctx.arc(0, headY, 8 * u, 0, Math.PI * 2);
-    ctx.fill();
+    // Lightly modelled: a face carries its expression in small dark shapes, and
+    // shading it as hard as a chest turns all of them into one brown mass.
+    fillModelled(ctx, o.palette.skin, headY - 8 * u, 16 * u, 0.45);
 
-    // Ear
+    drawFace(ctx, headY, u, o.palette);
+    drawCap(ctx, headY, u, o.palette, o.direction);
+
+    ctx.restore();   // the walking bob and the skid lean
+    ctx.restore();
+}
+
+/** The far limb is the same limb, painted into its own shadow. */
+function drawLeg(ctx, hipX, footX, u, color, far) {
+    ctx.beginPath();
+    ctx.moveTo(hipX, -10 * u);
+    ctx.lineTo(footX, -2 * u);
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    if (far) {
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.stroke();
+    }
+}
+
+function drawShoe(ctx, x, u, far) {
+    ctx.beginPath();
+    ctx.ellipse(x, -1.5 * u, 5 * u, 2.6 * u, 0, 0, Math.PI * 2);
+    ctx.fillStyle = far ? '#3F2913' : '#5C3C1C';
+    ctx.fill();
+    if (!far) {
+        // A lit strip along the top of the near shoe, where a boot catches the
+        // light - the one place on the sprite the ground reflects back up.
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+        ctx.beginPath();
+        ctx.ellipse(x, -2.4 * u, 4 * u, 1 * u, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawArm(ctx, shoulderX, handX, lift, u, color, far) {
+    ctx.beginPath();
+    ctx.moveTo(shoulderX, -24 * u);
+    ctx.lineTo(handX, lift);
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    if (far) {
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.stroke();
+    }
+}
+
+function drawHand(ctx, x, y, u, far) {
+    ctx.beginPath();
+    ctx.arc(x, y, 2.6 * u, 0, Math.PI * 2);
+    ctx.fillStyle = far ? '#C9CCD4' : '#FFFFFF';
+    ctx.fill();
+}
+
+/** Ear, nose, moustache, eye and the shadow the cap brim throws over it. */
+function drawFace(ctx, headY, u, palette) {
+    ctx.fillStyle = palette.skin;
     ctx.beginPath();
     ctx.arc(-6 * u, headY + 1 * u, 2.4 * u, 0, Math.PI * 2);
     ctx.fill();
 
-    // Nose
+    // Nose, with its own highlight: it is the part of the face that sticks out
+    // furthest, so it is the part the light finds first.
     ctx.beginPath();
     ctx.arc(6.5 * u, headY + 1 * u, 3 * u, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    ctx.arc(6 * u, headY, 1.5 * u, 0, Math.PI * 2);
+    ctx.fill();
 
-    // Moustache
+    // Moustache, in two lobes with a parting and a lit top edge. One flat
+    // ellipse of brown was the single thing making the lower face read as mud.
     ctx.fillStyle = '#4A2C0F';
     ctx.beginPath();
-    ctx.ellipse(4 * u, headY + 3.5 * u, 4.5 * u, 2 * u, 0, 0, Math.PI * 2);
+    ctx.ellipse(2.4 * u, headY + 3.8 * u, 2.7 * u, 1.9 * u, 0.15, 0, Math.PI * 2);
+    ctx.ellipse(6 * u, headY + 3.6 * u, 2.6 * u, 1.8 * u, -0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    ctx.beginPath();
+    ctx.ellipse(4 * u, headY + 2.4 * u, 3.6 * u, 0.7 * u, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Eye
@@ -3173,35 +3293,60 @@ function drawMarioSprite(ctx, o) {
     ctx.ellipse(3.6 * u, headY - 2 * u, 1 * u, 1.8 * u, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Sideburn
+    // Sideburn, narrower than the moustache so the cheek still reads as skin
     ctx.fillStyle = '#4A2C0F';
     ctx.beginPath();
-    ctx.ellipse(-4 * u, headY + 1 * u, 2.4 * u, 3.4 * u, 0, 0, Math.PI * 2);
+    ctx.ellipse(-4.2 * u, headY + 1 * u, 1.9 * u, 3.4 * u, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // --- Cap ---
-    ctx.fillStyle = o.palette.shirt;
+    // The brim's shadow across the forehead, clipped to the head so it follows
+    // the skull rather than sitting on it as a band.
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, headY, 8 * u, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(30, 10, 0, 0.22)';
+    ctx.fillRect(-8 * u, headY - 8 * u, 16 * u, 4 * u);
+    ctx.restore();
+}
+
+function drawCap(ctx, headY, u, palette, direction) {
     ctx.beginPath();
     ctx.arc(0, headY - 3 * u, 8.4 * u, Math.PI, 0);
-    ctx.fill();
+    fillModelled(ctx, palette.shirt, headY - 11.4 * u, 8.4 * u, 0.6);
+
+    // Peak and the band it sits on, shaded a touch darker than the crown: they
+    // face down and away from the light.
+    ctx.fillStyle = palette.shirt;
     ctx.beginPath();
     ctx.ellipse(6 * u, headY - 3.5 * u, 7 * u, 2.4 * u, 0, Math.PI, 0);
     ctx.fill();
-    ctx.fillRect(-0.5 * u, -3.5 * u + headY, 12 * u, 2 * u);
+    ctx.fillRect(-0.5 * u, headY - 3.5 * u, 12 * u, 2 * u);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+    ctx.beginPath();
+    ctx.ellipse(6 * u, headY - 3.5 * u, 7 * u, 2.4 * u, 0, Math.PI, 0);
+    ctx.fill();
+
+    // A lit edge along the crown
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 1.2 * u;
+    ctx.beginPath();
+    ctx.arc(0, headY - 3 * u, 7.8 * u, Math.PI * 1.08, Math.PI * 1.75);
+    ctx.stroke();
 
     // Cap badge
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
     ctx.arc(-0.5 * u, headY - 6 * u, 3.2 * u, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = o.palette.shirt;
+    ctx.fillStyle = palette.shirt;
     ctx.font = `bold ${4.6 * u}px "Trebuchet MS", Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     // Un-mirror just the badge so the letter never reads backwards
-    ctx.scale(o.direction < 0 ? -1 : 1, 1);
-    ctx.fillText('M', (o.direction < 0 ? 0.5 : -0.5) * u, headY - 5.6 * u);
-
+    ctx.save();
+    ctx.scale(direction < 0 ? -1 : 1, 1);
+    ctx.fillText('M', (direction < 0 ? 0.5 : -0.5) * u, headY - 5.6 * u);
     ctx.restore();
 }
 
@@ -3536,28 +3681,45 @@ class Enemy {
         const cx = screenX + this.width / 2;
         const waddle = this.alive ? Math.sin(this.animTime * 0.18) * 2 : 0;
 
-        // Feet
-        ctx.fillStyle = '#5C3C1C';
+        // Feet - the trailing one in its own shadow, like the player's
+        ctx.fillStyle = '#3F2913';
         ctx.beginPath();
         ctx.ellipse(cx - 8 + waddle, screenY + this.height - 3, 6, 3.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#5C3C1C';
+        ctx.beginPath();
         ctx.ellipse(cx + 8 - waddle, screenY + this.height - 3, 6, 3.5, 0, 0, Math.PI * 2);
         ctx.fill();
 
         // Stem / body
-        ctx.fillStyle = '#F5DEB3';
+        const stemTop = screenY + this.height / 2.6;
         ctx.beginPath();
-        ctx.roundRect(cx - 8, screenY + this.height / 2.6, 16, this.height / 1.9, 4);
-        ctx.fill();
+        ctx.roundRect(cx - 8, stemTop, 16, this.height / 1.9, 4);
+        fillModelled(ctx, '#F5DEB3', stemTop, this.height / 1.9, 0.8);
 
         // Mushroom cap
+        const capBase = screenY + this.height / 2.4;
         const capGradient = ctx.createLinearGradient(0, screenY, 0, screenY + this.height / 2);
         capGradient.addColorStop(0, '#E07B39');
         capGradient.addColorStop(1, '#8B4513');
         ctx.fillStyle = capGradient;
         ctx.beginPath();
-        ctx.ellipse(cx, screenY + this.height / 2.4, this.width / 2, this.height / 2.6, 0, Math.PI, 0);
+        ctx.ellipse(cx, capBase, this.width / 2, this.height / 2.6, 0, Math.PI, 0);
         ctx.fill();
-        ctx.fillRect(cx - this.width / 2, screenY + this.height / 2.4 - 1, this.width, 3);
+        ctx.fillRect(cx - this.width / 2, capBase - 1, this.width, 3);
+
+        // The cap throws a shadow onto the stem it overhangs, and catches the
+        // light along its own crown. Between them the cap stops being a decal
+        // painted on the front of the body.
+        ctx.fillStyle = 'rgba(60, 30, 10, 0.3)';
+        ctx.beginPath();
+        ctx.ellipse(cx, capBase + 3, 9, 3.5, 0, 0, Math.PI);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 225, 190, 0.45)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(cx, capBase, this.width / 2.2, this.height / 2.9, 0, Math.PI * 1.15, Math.PI * 1.75);
+        ctx.stroke();
 
         // Cap spots
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
@@ -3651,6 +3813,16 @@ class JumpingEnemy extends Enemy {
 
         drawGroundShadow(this, cx);
 
+        // Spikes along the top, behind the body so their roots are hidden by it
+        for (let i = -1; i <= 1; i++) {
+            ctx.beginPath();
+            ctx.moveTo(cx + i * 9 - 4, bottom - h + 4);
+            ctx.lineTo(cx + i * 9, bottom - h - 5);
+            ctx.lineTo(cx + i * 9 + 4, bottom - h + 4);
+            ctx.closePath();
+            fillModelled(ctx, '#C0392B', bottom - h - 5, 9);
+        }
+
         // Springy blob body
         const bodyGradient = ctx.createRadialGradient(cx - w / 5, bottom - h * 0.7, 2, cx, bottom - h / 2, w / 1.4);
         bodyGradient.addColorStop(0, '#FF9A9A');
@@ -3660,16 +3832,16 @@ class JumpingEnemy extends Enemy {
         ctx.ellipse(cx, bottom - h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Spikes along the top
-        ctx.fillStyle = '#C0392B';
-        for (let i = -1; i <= 1; i++) {
-            ctx.beginPath();
-            ctx.moveTo(cx + i * 9 - 4, bottom - h + 4);
-            ctx.lineTo(cx + i * 9, bottom - h - 5);
-            ctx.lineTo(cx + i * 9 + 4, bottom - h + 4);
-            ctx.closePath();
-            ctx.fill();
-        }
+        // A rubbery ball is glossy, and a highlight is what says so. It sits
+        // where the light is, so it also grounds the thing in the scene.
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.beginPath();
+        ctx.ellipse(cx - w / 5, bottom - h * 0.74, w / 7, h / 11, -0.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(90, 20, 20, 0.22)';
+        ctx.beginPath();
+        ctx.ellipse(cx, bottom - h * 0.16, w / 3.4, h / 10, 0, 0, Math.PI * 2);
+        ctx.fill();
 
         // Eyes
         const look = Math.sign(this.velocityX) || 1;
@@ -3857,10 +4029,11 @@ class TurtleEnemy extends Enemy {
             const shellGradient = ctx.createRadialGradient(cx - 5, shellCY - 5, 2, cx, shellCY, this.width / 2);
             shellGradient.addColorStop(0, '#4CAF50');
             shellGradient.addColorStop(1, this.shellColor);
-            ctx.fillStyle = shellGradient;
             ctx.beginPath();
             ctx.ellipse(cx, shellCY, this.width / 2.1, shellHeight / 2, 0, 0, Math.PI * 2);
-            ctx.fill();
+            // Clipped to the shell, so a tucked-in turtle stays inside its own
+            // outline - which is exactly what the artwork suite checks.
+            fillModelled(ctx, shellGradient, shellCY - shellHeight / 2, shellHeight, 0.7);
 
             // Shell plates rotate while sliding
             ctx.save();
@@ -3911,15 +4084,19 @@ class TurtleEnemy extends Enemy {
         const look = Math.sign(this.velocityX) || 1;
         const legSwing = Math.sin(this.animTime * 0.16) * 4;
 
-        // Legs
-        ctx.strokeStyle = '#66BB6A';
+        // Legs, the trailing one darker so the pair reads as two legs and not
+        // as one wide one
         ctx.lineWidth = 4;
         ctx.lineCap = 'round';
+        ctx.strokeStyle = '#57A85C';
         ctx.beginPath();
-        ctx.moveTo(cx - 7, screenY + this.height * 0.72);
-        ctx.lineTo(cx - 9 + legSwing, screenY + this.height - 2);
-        ctx.moveTo(cx + 7, screenY + this.height * 0.72);
-        ctx.lineTo(cx + 9 - legSwing, screenY + this.height - 2);
+        ctx.moveTo(cx - look * 7, screenY + this.height * 0.72);
+        ctx.lineTo(cx - look * 9 + legSwing, screenY + this.height - 2);
+        ctx.stroke();
+        ctx.strokeStyle = '#66BB6A';
+        ctx.beginPath();
+        ctx.moveTo(cx + look * 7, screenY + this.height * 0.72);
+        ctx.lineTo(cx + look * 9 - legSwing, screenY + this.height - 2);
         ctx.stroke();
 
         // Body parts stack back to front: neck, then shell over its root, then
@@ -3941,10 +4118,11 @@ class TurtleEnemy extends Enemy {
         const shellGradient = ctx.createRadialGradient(shellCX - 4, shellCY - 6, 2, shellCX, shellCY, shellRX * 1.4);
         shellGradient.addColorStop(0, '#4CAF50');
         shellGradient.addColorStop(1, this.shellColor);
-        ctx.fillStyle = shellGradient;
         ctx.beginPath();
         ctx.ellipse(shellCX, shellCY, shellRX, shellRY, 0, 0, Math.PI * 2);
-        ctx.fill();
+        fillModelled(ctx, shellGradient, shellCY - shellRY, shellRY * 2, 0.7);
+        ctx.beginPath();
+        ctx.ellipse(shellCX, shellCY, shellRX, shellRY, 0, 0, Math.PI * 2);
         ctx.strokeStyle = '#F5DEB3';
         ctx.lineWidth = 2.5;
         ctx.stroke();
@@ -3958,11 +4136,12 @@ class TurtleEnemy extends Enemy {
             ctx.fill();
         }
 
-        // Head, clear of the shell's leading edge
-        ctx.fillStyle = '#8BC34A';
+        // Head, clear of the shell's leading edge. Barely modelled: the artwork
+        // suite finds this head by scanning for light green past the shell, and
+        // a head shaded as hard as the shell stops being light green.
         ctx.beginPath();
         ctx.ellipse(headX, headY, 7.5, 6.5, 0, 0, Math.PI * 2);
-        ctx.fill();
+        fillModelled(ctx, '#8BC34A', headY - 6.5, 13, 0.4);
 
         // Snout
         ctx.fillStyle = '#A5D96A';
@@ -4345,10 +4524,9 @@ class PowerUp {
             ctx.fill();
         } else {
             // Stem
-            ctx.fillStyle = '#FFF3D6';
             ctx.beginPath();
             ctx.roundRect(cx - 7, cy, 14, this.height / 2 - 1, 3);
-            ctx.fill();
+            fillModelled(ctx, '#FFF3D6', cy, this.height / 2 - 1, 0.8);
 
             // Eyes
             ctx.fillStyle = '#000';
@@ -4366,6 +4544,18 @@ class PowerUp {
             ctx.ellipse(cx, cy, this.width / 2, this.height / 2, 0, Math.PI, 0);
             ctx.fill();
             ctx.fillRect(cx - this.width / 2, cy - 1, this.width, 2);
+
+            // The same trick as the enemy's cap: a lit crown, and a shadow
+            // thrown down onto the stem it overhangs.
+            ctx.strokeStyle = 'rgba(255, 220, 220, 0.5)';
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, this.width / 2.3, this.height / 2.3, 0, Math.PI * 1.15, Math.PI * 1.75);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(120, 40, 30, 0.28)';
+            ctx.beginPath();
+            ctx.ellipse(cx, cy + 2, 7, 2.6, 0, 0, Math.PI);
+            ctx.fill();
 
             // Spots
             ctx.fillStyle = '#FFF3D6';
@@ -4823,6 +5013,10 @@ class Platform {
 
         ctx.restore();
 
+        // Drawn last because it hangs outside the collision box the body above
+        // was clipped to: turf curling over the lip of a ledge.
+        if (this.variant === 'ground') this.drawTurfOverhang(screenX, screenY);
+
         this.drawOwner(screenX, screenY);
     }
 
@@ -4861,36 +5055,115 @@ class Platform {
         ctx.fillStyle = soil;
         ctx.fillRect(screenX, screenY, this.width, this.height);
 
-        // Surface cap - grass, sand, frost or scorched rock
-        ctx.fillStyle = theme.turf[0];
-        ctx.fillRect(screenX, screenY, this.width, 10);
-        ctx.fillStyle = theme.turf[1];
-        ctx.fillRect(screenX, screenY, this.width, 4);
+        this.drawStrata(screenX, screenY);
+        this.drawSurfaceCap(screenX, screenY);
+        if (theme.blades) this.drawBlades(screenY);
+        this.drawGrit(screenY);
+    }
 
-        const start = Math.floor(this.x / 16) * 16;
+    /**
+     * The stretch of this platform that is actually on screen, snapped to the
+     * pattern's step so the texture stays anchored to the world instead of
+     * crawling along with the camera. Ground runs to hundreds of pixels a
+     * piece; texturing all of it to show a viewport of it was most of the cost
+     * of drawing the floor.
+     */
+    surfaceSpan(step) {
+        const left = Math.max(this.x, gameState.camera.x - step);
+        const right = Math.min(this.x + this.width, gameState.camera.x + view.w + step);
+        return { from: Math.floor(left / step) * step, to: right };
+    }
 
-        // Grass blades along the top edge
-        if (theme.blades) {
-            ctx.strokeStyle = theme.turf[0];
-            ctx.lineWidth = 2;
-            for (let wx = start; wx < this.x + this.width; wx += 16) {
-                const sx = wx - gameState.camera.x;
-                ctx.beginPath();
-                ctx.moveTo(sx, screenY);
-                ctx.lineTo(sx + 3, screenY - 6);
-                ctx.lineTo(sx + 6, screenY);
-                ctx.stroke();
-            }
+    /**
+     * Bands of older ground further down. A single gradient reads as a painted
+     * wall; a few seams in it read as depth you happen to be standing on.
+     */
+    drawStrata(screenX, screenY) {
+        ctx.save();
+        for (let depth = 58; depth < this.height; depth += 62) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.09)';
+            ctx.fillRect(screenX, screenY + depth, this.width, 9);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+            ctx.fillRect(screenX, screenY + depth + 9, this.width, 2);
         }
+        ctx.restore();
+    }
 
-        // Pebbles for texture
-        ctx.fillStyle = 'rgba(0,0,0,0.14)';
-        for (let wx = start; wx < this.x + this.width; wx += 34) {
+    /** Grass, sand, frost or scorched rock - the layer you actually stand on. */
+    drawSurfaceCap(screenX, screenY) {
+        const cap = ctx.createLinearGradient(0, screenY, 0, screenY + 12);
+        cap.addColorStop(0, theme.turf[1]);
+        cap.addColorStop(0.55, theme.turf[0]);
+        cap.addColorStop(1, theme.turf[0]);
+        ctx.fillStyle = cap;
+        ctx.fillRect(screenX, screenY, this.width, 12);
+
+        // A shadow where the cap meets the soil, and a lit rim along the very
+        // top: together they turn a painted band into a layer with a thickness.
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+        ctx.fillRect(screenX, screenY + 12, this.width, 3);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.fillRect(screenX, screenY, this.width, 1.5);
+    }
+
+    /** Tufts along the top edge, in two tones so the edge is not a comb. */
+    drawBlades(screenY) {
+        const span = this.surfaceSpan(11);
+        ctx.save();
+        ctx.lineWidth = 2;
+        for (let wx = span.from; wx < span.to; wx += 11) {
             const sx = wx - gameState.camera.x;
+            const step = (wx / 11) % 3;
+            const height = 5 + step * 2.5;
+            const lean = step === 1 ? -2 : 2;
+            ctx.strokeStyle = step === 1 ? theme.turf[1] : theme.turf[0];
             ctx.beginPath();
-            ctx.arc(sx + 12, screenY + 24 + ((wx / 34) % 3) * 7, 3, 0, Math.PI * 2);
+            ctx.moveTo(sx, screenY + 2);
+            ctx.quadraticCurveTo(sx + lean, screenY - height * 0.6, sx + lean * 1.6, screenY - height);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    /** Stones and grit in the soil, lit from the same side as everything else. */
+    drawGrit(screenY) {
+        const span = this.surfaceSpan(34);
+        ctx.save();
+        for (let wx = span.from; wx < span.to; wx += 34) {
+            const sx = wx - gameState.camera.x;
+            const step = (wx / 34) % 3;
+            const y = screenY + 28 + step * 9;
+            const radius = 2.2 + step * 0.8;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
+            ctx.beginPath();
+            ctx.arc(sx + 12, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+            ctx.beginPath();
+            ctx.arc(sx + 11, y - radius * 0.5, radius * 0.5, 0, Math.PI * 2);
             ctx.fill();
         }
+        ctx.restore();
+    }
+
+    /**
+     * The turf curling over the ends of a ledge. Those ends are the walls of
+     * the pits, and a flat cut edge there is what makes a chasm look like a
+     * missing rectangle rather than a hole in the ground.
+     */
+    drawTurfOverhang(screenX, screenY) {
+        ctx.save();
+        ctx.fillStyle = theme.turf[0];
+        for (const [edge, direction] of [[screenX, -1], [screenX + this.width, 1]]) {
+            ctx.beginPath();
+            ctx.moveTo(edge, screenY);
+            ctx.lineTo(edge + direction * 7, screenY + 1);
+            ctx.quadraticCurveTo(edge + direction * 8, screenY + 12, edge + direction * 2, screenY + 15);
+            ctx.lineTo(edge, screenY + 12);
+            ctx.closePath();
+            ctx.fill();
+        }
+        ctx.restore();
     }
 
     drawBrick(screenX, screenY) {
@@ -4900,16 +5173,28 @@ class Platform {
         ctx.fillStyle = stone;
         ctx.fillRect(screenX, screenY, this.width, this.height);
 
-        ctx.strokeStyle = 'rgba(90, 45, 20, 0.65)';
-        ctx.lineWidth = 2;
-
         const brickWidth = CONFIG.BLOCK_SIZE;
         const brickHeight = CONFIG.BLOCK_SIZE / 2;
 
+        // The mortar comes from the theme - it used to be the overworld's brown
+        // whatever world you were in, which put warm seams through cave rock
+        // and blue ice alike.
+        ctx.strokeStyle = theme.mortar;
+        ctx.lineWidth = 2;
+
         for (let by = 0; by < this.height; by += brickHeight) {
-            const offset = (by / brickHeight) % 2 === 0 ? 0 : brickWidth / 2;
+            const row = by / brickHeight;
+            const offset = row % 2 === 0 ? 0 : brickWidth / 2;
             for (let bx = -brickWidth; bx < this.width; bx += brickWidth) {
-                ctx.strokeRect(screenX + bx + offset, screenY + by, brickWidth, brickHeight);
+                const left = screenX + bx + offset;
+                // A little tonal variation per stone, keyed off its position in
+                // the world so it never shimmers as the camera moves.
+                const shade = ((Math.abs(Math.round((this.x + bx) / brickWidth)) + row) % 3);
+                if (shade) {
+                    ctx.fillStyle = shade === 1 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.07)';
+                    ctx.fillRect(left, screenY + by, brickWidth, brickHeight);
+                }
+                ctx.strokeRect(left, screenY + by, brickWidth, brickHeight);
             }
         }
 
@@ -5793,7 +6078,7 @@ function initLevel() {
 
     // The parallax backdrop is sized to the world, so it has to be rebuilt
     // whenever the world changes size.
-    initClouds();
+    initBackdrop();
 
     buildGround(design);
 
@@ -6592,6 +6877,9 @@ function tick() {
 
     updateCamera();
     updateParticles();
+    // After the camera, so the drifting layers are moved against where it
+    // actually ended up this frame rather than where it was last frame.
+    updateAmbience();
     updateFloatingTexts();
 
     // Countdown timer (single player only)
@@ -6653,6 +6941,12 @@ function render() {
     hazards.forEach(hazard => hazard.draw());
 
     drawParticles();
+    // Snow and embers blow between the camera and the level, so they come
+    // after everything they are meant to be in front of.
+    drawAmbience(true);
+    drawVignette();
+
+    // The HUD layer: read over the top of the grade, never through it.
     drawFloatingTexts();
     drawGoalArrow();
 
@@ -6693,6 +6987,348 @@ function drawPauseVeil() {
 }
 
 // ---------------------------------------------------------------------------
+//  Atmosphere
+//  Not the level, but everything the level is seen through: haze on the
+//  horizon, light hanging in the air, whatever is drifting past the camera,
+//  and the fall-off at the edge of the frame. It is all theme data, so a new
+//  world gets its own weather without a new renderer.
+// ---------------------------------------------------------------------------
+
+// A gradient that spans the viewport is identical from one frame to the next,
+// so building one per frame was pure garbage collection. Cached by what makes
+// them differ, and emptied whenever the theme or the viewport changes.
+const gradientCache = new Map();
+
+function cachedGradient(key, build) {
+    let gradient = gradientCache.get(key);
+    if (!gradient) {
+        gradient = build();
+        gradientCache.set(key, gradient);
+    }
+    return gradient;
+}
+
+function invalidateGradients() {
+    gradientCache.clear();
+}
+
+// Relief gradients, cached per context and per height. A gradient belongs to
+// the context that created it, and the player sprite is sometimes drawn to an
+// off-screen canvas of its own, so one shared cache will not do.
+const reliefGradients = new WeakMap();
+
+/**
+ * Lit along the top, falling into shadow at the base. Painted over a shape
+ * that has already been filled - and clipped to it - so one routine models a
+ * hill, a pillar, a stalagmite, a cloud and a character's chest without
+ * knowing any of their colours. That last part is what makes it worth
+ * sharing: a player wearing a star changes colour every frame, and the
+ * shading does not care.
+ *
+ * @param {CanvasRenderingContext2D} target where to paint
+ * @param {number} strength 1 for full modelling, less for a softer body
+ */
+function reliefGradient(target, span) {
+    let cache = reliefGradients.get(target);
+    if (!cache) {
+        cache = new Map();
+        reliefGradients.set(target, cache);
+    }
+
+    let grad = cache.get(span);
+    if (!grad) {
+        grad = target.createLinearGradient(0, 0, 0, span);
+        grad.addColorStop(0, 'rgba(255, 255, 255, 0.22)');
+        grad.addColorStop(0.45, 'rgba(255, 255, 255, 0.04)');
+        grad.addColorStop(1, 'rgba(0, 0, 0, 0.26)');
+        cache.set(span, grad);
+    }
+    return grad;
+}
+
+/**
+ * Lays the light over a box, for a caller that has already clipped to the
+ * shape it wants modelled. The gradient is built once at the origin and moved
+ * into place by the transform, which is what keeps it cacheable: a path is
+ * fixed in device space the moment it is built, so translating afterwards
+ * moves the gradient and not the shape.
+ */
+function paintRelief(target, left, topY, width, height, strength = 1) {
+    const span = Math.max(1, Math.round(height));
+    target.save();
+    // Multiplied, not assigned: a sprite mid-flash is already half see-through
+    // and its shading has to flash with it.
+    target.globalAlpha *= strength;
+    target.translate(0, topY);
+    target.fillStyle = reliefGradient(target, span);
+    target.fillRect(left, 0, width, span);
+    target.restore();
+}
+
+/**
+ * Fills the path the caller has built and then models it, by filling that same
+ * path a second time with the light over it. Every solid body in the game is
+ * drawn this way.
+ *
+ * Filling twice rather than filling once and clipping is not a micro-
+ * optimisation: a clip per body part put nine characters - the multiplayer
+ * worst case - at two and a half times the cost of drawing them flat.
+ */
+function fillModelled(target, color, topY, height, strength = 1) {
+    target.fillStyle = color;
+    target.fill();
+
+    target.save();
+    target.globalAlpha *= strength;
+    target.translate(0, topY);
+    target.fillStyle = reliefGradient(target, Math.max(1, Math.round(height)));
+    target.fill();
+    target.restore();
+}
+
+// How far the horizon wash reaches above and below the horizon itself.
+const HAZE_RISE = 170;
+const HAZE_FALL = 40;
+
+/**
+ * The reason distance looks like distance: air. A wash of the sky's own colour
+ * laid along the horizon, so the far layer of the backdrop dissolves into it
+ * instead of standing there as a smaller, equally crisp shape.
+ * @param {number} strength 1 for the full wash, less for the nearer layers
+ */
+function drawHaze(horizonY, strength = 1) {
+    if (!theme.haze || strength <= 0) return;
+
+    const grad = cachedGradient('haze', () => {
+        const g = ctx.createLinearGradient(0, 0, 0, HAZE_RISE + HAZE_FALL);
+        g.addColorStop(0, 'rgba(255, 255, 255, 0)');
+        g.addColorStop(0.72, theme.haze);
+        g.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        return g;
+    });
+
+    ctx.save();
+    ctx.translate(0, horizonY - HAZE_RISE);
+    ctx.globalAlpha = strength;
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, view.w, HAZE_RISE + HAZE_FALL);
+    ctx.restore();
+}
+
+/** Where the light in this world is coming from, in screen coordinates. */
+function lightOrigin() {
+    return {
+        x: view.w * 0.78 - gameState.camera.x * 0.03,
+        y: view.h * 0.16 - gameState.camera.y * 0.05,
+    };
+}
+
+/**
+ * Light you can see hanging in the air: sunbeams slanting across the frame,
+ * daylight falling through a crack in the cave roof, furnace-glow rising out
+ * of the castle floor. Additive and very faint - it should read as air, not
+ * as another object in the scene.
+ */
+function drawLightShafts() {
+    const shafts = theme.shafts;
+    if (!shafts) return;
+
+    const beam = shaftGeometry(shafts.kind);
+    const breath = Math.sin(Date.now() / 2600);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 4; i++) {
+        const spread = (i - 1.5) * beam.spread;
+        ctx.globalAlpha = 0.45 + Math.sin(breath + i) * 0.3;
+        drawShaft(beam.x + spread, beam.y, beam.angle + i * 0.045,
+            beam.length, beam.width + i * 8, shafts.color);
+    }
+    ctx.restore();
+}
+
+/** Origin, direction, spacing and opening width of the beams for each light. */
+function shaftGeometry(kind) {
+    if (kind === 'above') {
+        return { x: view.w * 0.3, y: -30, angle: Math.PI / 2 - 0.18, length: view.h + 80, spread: 110, width: 24 };
+    }
+    if (kind === 'below') {
+        return { x: view.w * 0.5, y: view.h + 30, angle: -Math.PI / 2 - 0.1, length: view.h, spread: 130, width: 26 };
+    }
+    // Daylight comes off the sun itself, so the beams stay tight: a wide fan
+    // out of a small disc reads as a lens effect, not as light through air.
+    const origin = lightOrigin();
+    return { x: origin.x, y: origin.y, angle: Math.PI / 2 + 0.55, length: view.h * 1.5, spread: 22, width: 12 };
+}
+
+/**
+ * One beam: a narrow wedge opening out from the light and dying away along
+ * its length. Without that fade the beams end in a hard bright edge halfway
+ * down the screen and read as painted-on geometry rather than as light.
+ */
+function drawShaft(x, y, angle, length, width, color) {
+    const span = Math.round(length);
+    const grad = cachedGradient(`shaft:${span}:${color}`, () => {
+        const g = ctx.createLinearGradient(0, 0, span, 0);
+        g.addColorStop(0, color);
+        g.addColorStop(0.55, color);
+        g.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        return g;
+    });
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(0, -5);
+    ctx.lineTo(0, 5);
+    ctx.lineTo(span, width);
+    ctx.lineTo(span, -width);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+}
+
+// Whatever this world has drifting through it. Held in screen space and moved
+// against the camera by its own depth, so a mote close to the lens sweeps past
+// while one far away barely shifts - parallax without a second world to track.
+const ambience = { motes: [], cameraX: 0, cameraY: 0 };
+
+function initAmbience() {
+    ambience.motes = [];
+    ambience.cameraX = gameState.camera.x;
+    ambience.cameraY = gameState.camera.y;
+
+    const spec = theme.ambience;
+    if (!spec) return;
+
+    // Seeded like the rest of the backdrop: every player sees the same weather.
+    let seed = 24601;
+    const rand = () => {
+        seed = (seed * 1664525 + 1013904223) % 4294967296;
+        return seed / 4294967296;
+    };
+
+    for (let i = 0; i < spec.count; i++) {
+        ambience.motes.push({
+            x: rand() * view.w,
+            y: rand() * view.h,
+            depth: 0.2 + rand() * 0.7,
+            size: 1 + rand() * 2.4,
+            phase: rand() * Math.PI * 2,
+            drift: 0.4 + rand() * 0.8,
+        });
+    }
+}
+
+function updateAmbience() {
+    const spec = theme.ambience;
+    if (!spec || ambience.motes.length === 0) return;
+
+    const dx = gameState.camera.x - ambience.cameraX;
+    const dy = gameState.camera.y - ambience.cameraY;
+    ambience.cameraX = gameState.camera.x;
+    ambience.cameraY = gameState.camera.y;
+
+    for (const mote of ambience.motes) {
+        mote.phase += 0.02 * mote.drift;
+        mote.x -= dx * mote.depth;
+        mote.y -= dy * mote.depth;
+        driftMote(spec.kind, mote);
+        wrapMote(mote);
+    }
+}
+
+/** Each kind of weather is the same mote moving differently. */
+function driftMote(kind, mote) {
+    switch (kind) {
+        case 'snow':
+            mote.x += Math.sin(mote.phase) * 0.6;
+            mote.y += 0.5 + mote.drift;
+            break;
+        case 'embers':
+            mote.x += Math.sin(mote.phase) * 0.5;
+            mote.y -= 0.5 + mote.drift * 0.9;
+            break;
+        case 'spray':
+            mote.x += 0.7 + mote.drift;
+            mote.y -= 0.15;
+            break;
+        case 'wisps':
+            mote.x -= 0.5 + mote.drift;
+            break;
+        case 'motes':
+            mote.x += Math.sin(mote.phase * 0.7) * 0.25;
+            mote.y += Math.cos(mote.phase) * 0.22;
+            break;
+        default: // pollen, and anything else that simply hangs in the air
+            mote.x += 0.25 + mote.drift * 0.35;
+            mote.y += Math.sin(mote.phase) * 0.3;
+            break;
+    }
+}
+
+function wrapMote(mote) {
+    const margin = 40;
+    const spanX = view.w + margin * 2;
+    const spanY = view.h + margin * 2;
+    if (mote.x < -margin) mote.x += spanX;
+    if (mote.x > view.w + margin) mote.x -= spanX;
+    if (mote.y < -margin) mote.y += spanY;
+    if (mote.y > view.h + margin) mote.y -= spanY;
+}
+
+/**
+ * @param {boolean} front The pass drawn over the level rather than behind it.
+ * Snow and embers belong in front - they are between you and the world - but
+ * anything in front of the action stays faint enough to read a pit through.
+ */
+function drawAmbience(front) {
+    const spec = theme.ambience;
+    if (!spec || Boolean(spec.front) !== front) return;
+
+    const glowing = spec.kind === 'embers' || spec.kind === 'motes';
+
+    ctx.save();
+    if (glowing) ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = spec.color;
+
+    for (const mote of ambience.motes) {
+        ctx.globalAlpha = 0.55 + Math.sin(mote.phase * 1.7) * 0.45;
+        ctx.beginPath();
+        if (spec.kind === 'wisps') {
+            ctx.ellipse(mote.x, mote.y, mote.size * 9, mote.size * 0.7, 0, 0, Math.PI * 2);
+        } else {
+            ctx.arc(mote.x, mote.y, mote.size, 0, Math.PI * 2);
+        }
+        ctx.fill();
+    }
+
+    ctx.restore();
+}
+
+/** The frame falls away at its corners, which puts the eye on the action. */
+function drawVignette() {
+    if (!theme.vignette) return;
+
+    const grad = cachedGradient('vignette', () => {
+        const radius = Math.hypot(view.w, view.h) / 2;
+        const g = ctx.createRadialGradient(
+            view.w / 2, view.h * 0.48, radius * 0.45,
+            view.w / 2, view.h * 0.48, radius);
+        g.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        g.addColorStop(1, theme.vignette);
+        return g;
+    });
+
+    ctx.save();
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, view.w, view.h);
+    ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
 //  Parallax backdrop
 // ---------------------------------------------------------------------------
 
@@ -6700,10 +7336,17 @@ let cloudPositions = [];
 let hillPositions = [];
 let bushPositions = [];
 
-function initClouds() {
+/**
+ * Lays out everything behind the level for the world being built: the clouds,
+ * the backdrop pieces, the scenery on the horizon and whatever is drifting
+ * through the air, plus the gradients that depend on the theme. Called
+ * whenever the world changes, which is the only time any of it changes.
+ */
+function initBackdrop() {
     cloudPositions = [];
     hillPositions = [];
     bushPositions = [];
+    invalidateGradients();
 
     // Deterministic layout so every player in a session sees the same world.
     let seed = 1337;
@@ -6726,8 +7369,15 @@ function initClouds() {
             x: i * 320 + rand() * 120,
             scale: rand() * 0.5 + 0.8,
             far: i % 2 === 0,
+            tone: rand(),               // a little variety within a layer
         });
     }
+
+    // Far pieces first, so plain iteration paints back to front. The backdrop
+    // renderers below walk one depth at a time and no longer rely on this, but
+    // it is what went wrong before: generated alternately and drawn in order, a
+    // distant hill painted straight over a near one and the depth collapsed.
+    hillPositions.sort((a, b) => Number(b.far) - Number(a.far));
 
     for (let i = 0; i < 30; i++) {
         bushPositions.push({
@@ -6735,15 +7385,19 @@ function initClouds() {
             scale: rand() * 0.45 + 0.7,
         });
     }
+
+    initAmbience();
 }
 
 function drawBackground() {
     // Sky
-    const sky = ctx.createLinearGradient(0, 0, 0, view.h);
-    sky.addColorStop(0, theme.sky[0]);
-    sky.addColorStop(0.45, theme.sky[1]);
-    sky.addColorStop(1, theme.sky[2]);
-    ctx.fillStyle = sky;
+    ctx.fillStyle = cachedGradient('sky', () => {
+        const sky = ctx.createLinearGradient(0, 0, 0, view.h);
+        sky.addColorStop(0, theme.sky[0]);
+        sky.addColorStop(0.45, theme.sky[1]);
+        sky.addColorStop(1, theme.sky[2]);
+        return sky;
+    });
     ctx.fillRect(0, 0, view.w, view.h);
 
     drawSkyLight();
@@ -6753,11 +7407,14 @@ function drawBackground() {
         case 'peaks': drawMountains(true); break;
         case 'cave': drawCaveWalls(); break;
         case 'pillars': drawCastlePillars(); break;
+        case 'cloudbank': drawCloudBank(); break;
         default: break;
     }
 
     if (theme.clouds) drawClouds();
+    drawLightShafts();
     drawScenery();
+    drawAmbience(false);
 
     // Everything below the ground line is dark earth. Ground segments paint
     // over it, so the gaps between them read as real chasms rather than a
@@ -6790,8 +7447,7 @@ function drawSkyLight() {
         return;
     }
 
-    const x = view.w * 0.78 - gameState.camera.x * 0.03;
-    const y = view.h * 0.16 - gameState.camera.y * 0.05;
+    const { x, y } = lightOrigin();
     const glow = ctx.createRadialGradient(x, y, 6, x, y, 90);
     glow.addColorStop(0, light.core);
     glow.addColorStop(0.25, light.halo);
@@ -6816,78 +7472,155 @@ function drawSkyLight() {
     }
 }
 
+/**
+ * Walks one depth of the backdrop: every piece at that depth which is actually
+ * on screen, in order. Each backdrop draws its far layer, lets the haze settle
+ * over it, then draws its near layer on top - which is what makes the two read
+ * as different distances rather than as two sizes of the same thing.
+ */
+function backdropLayer(far, factor, drawPiece) {
+    for (const piece of hillPositions) {
+        if (piece.far !== far) continue;
+        const x = piece.x - gameState.camera.x * factor;
+        if (x < -450 || x > view.w + 450) continue;
+        drawPiece(x, piece);
+    }
+}
+
+/**
+ * The furthest thing in the world: a low, flat skyline that barely moves at
+ * all. It never reads as a shape in its own right - it reads as "there is
+ * more world out there".
+ */
+function drawRidge(horizon) {
+    if (!theme.ridge) return;
+
+    ctx.save();
+    ctx.fillStyle = theme.ridge;
+    ctx.beginPath();
+    ctx.moveTo(-50, horizon + 20);
+    for (const piece of hillPositions) {
+        const x = piece.x * 1.4 - gameState.camera.x * 0.08;
+        if (x < -520 || x > view.w + 520) continue;
+        const w = 420 * piece.scale;
+        const h = 90 * piece.scale;
+        ctx.moveTo(x - w / 2, horizon + 20);
+        ctx.quadraticCurveTo(x, horizon - h, x + w / 2, horizon + 20);
+    }
+    ctx.fill();
+    ctx.restore();
+}
+
 function drawMountains(snowy = false) {
     const horizon = GROUND_Y - gameState.camera.y * 0.55;
 
-    for (const hill of hillPositions) {
-        const factor = hill.far ? 0.18 : 0.34;
-        const x = hill.x - gameState.camera.x * factor;
-        if (x < -400 || x > view.w + 400) continue;
+    drawRidge(horizon);
+    backdropLayer(true, 0.18, (x, hill) => drawHill(x, hill, horizon, snowy, true));
+    drawHaze(horizon, 0.9);
+    backdropLayer(false, 0.34, (x, hill) => drawHill(x, hill, horizon, snowy, false));
+    drawHaze(horizon, 0.3);
+}
 
-        const w = 260 * hill.scale;
-        const h = (hill.far ? 200 : 140) * hill.scale;
-        const baseY = horizon + (hill.far ? -10 : 6);
+/** One hill or alpine peak, modelled rather than flat. */
+function drawHill(x, hill, horizon, snowy, far) {
+    const w = 260 * hill.scale;
+    const h = (far ? 200 : 140) * hill.scale;
+    const baseY = horizon + (far ? -10 : 6);
 
-        ctx.save();
-        ctx.fillStyle = hill.far ? theme.far : theme.near;
-        ctx.beginPath();
-        if (snowy) {
-            // Sharp alpine ridges rather than rolling hills
-            ctx.moveTo(x - w / 2, baseY);
-            ctx.lineTo(x - w * 0.14, baseY - h);
-            ctx.lineTo(x + w * 0.06, baseY - h * 0.72);
-            ctx.lineTo(x + w / 2, baseY);
-        } else {
-            ctx.moveTo(x - w / 2, baseY);
-            ctx.quadraticCurveTo(x - w / 4, baseY - h, x, baseY - h);
-            ctx.quadraticCurveTo(x + w / 4, baseY - h, x + w / 2, baseY);
-        }
-        ctx.closePath();
-        ctx.fill();
-
-        if (hill.far || snowy) {
-            // Snow cap
-            ctx.fillStyle = 'rgba(255,255,255,0.65)';
-            ctx.beginPath();
-            ctx.moveTo(x - w * 0.11, baseY - h * 0.78);
-            ctx.quadraticCurveTo(x, baseY - h * 1.02, x + w * 0.11, baseY - h * 0.78);
-            ctx.quadraticCurveTo(x, baseY - h * 0.68, x - w * 0.11, baseY - h * 0.78);
-            ctx.fill();
-        }
-        ctx.restore();
+    ctx.save();
+    ctx.beginPath();
+    if (snowy) {
+        // Sharp alpine ridges rather than rolling hills
+        ctx.moveTo(x - w / 2, baseY);
+        ctx.lineTo(x - w * 0.14, baseY - h);
+        ctx.lineTo(x + w * 0.06, baseY - h * 0.72);
+        ctx.lineTo(x + w / 2, baseY);
+    } else {
+        ctx.moveTo(x - w / 2, baseY);
+        ctx.quadraticCurveTo(x - w / 4, baseY - h, x, baseY - h);
+        ctx.quadraticCurveTo(x + w / 4, baseY - h, x + w / 2, baseY);
     }
+    ctx.closePath();
+    ctx.fillStyle = far ? theme.far : theme.near;
+    ctx.fill();
+
+    ctx.clip();
+    // Snow belongs on snowy peaks. It used to go on every far hill, which put
+    // white caps on the hills behind a summer beach.
+    if (snowy) paintSnowLine(x, baseY, w, h);
+    paintRelief(ctx, x - w, baseY - h, w * 2, h);
+    ctx.restore();
+}
+
+/**
+ * Snow above the snow line. Painted inside the peak's own clip, so it can be a
+ * crude ragged band and still come out as snow lying on that exact summit -
+ * a cap drawn as its own free-standing shape ends up as a flag off the side.
+ */
+function paintSnowLine(x, baseY, w, h) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+    ctx.beginPath();
+    ctx.moveTo(x - w, baseY - h * 1.2);
+    ctx.lineTo(x + w, baseY - h * 1.2);
+    ctx.lineTo(x + w, baseY - h * 0.54);
+    ctx.lineTo(x + w * 0.2, baseY - h * 0.62);
+    ctx.lineTo(x + w * 0.04, baseY - h * 0.48);
+    ctx.lineTo(x - w * 0.14, baseY - h * 0.68);
+    ctx.lineTo(x - w * 0.3, baseY - h * 0.55);
+    ctx.lineTo(x - w, baseY - h * 0.62);
+    ctx.closePath();
+    ctx.fill();
 }
 
 // Underground: teeth of rock closing in from the top and bottom of the frame.
 function drawCaveWalls() {
     const baseY = GROUND_Y - gameState.camera.y * 0.55;
 
+    backdropLayer(true, 0.2, (x, piece) => drawCaveTeeth(x, piece, baseY, true));
+    drawHaze(baseY, 0.75);
+    backdropLayer(false, 0.4, (x, piece) => drawCaveTeeth(x, piece, baseY, false));
+}
+
+/** A stalagmite and the stalactite hanging opposite it. */
+function drawCaveTeeth(x, piece, baseY, far) {
+    const factor = far ? 0.2 : 0.4;
+    const w = 200 * piece.scale;
+    const h = (far ? 260 : 170) * piece.scale;
+    const topY = -gameState.camera.y * factor;
+
     ctx.save();
-    for (const hill of hillPositions) {
-        const factor = hill.far ? 0.2 : 0.4;
-        const x = hill.x - gameState.camera.x * factor;
-        if (x < -400 || x > view.w + 400) continue;
+    ctx.fillStyle = far ? theme.far : theme.near;
 
-        const w = 200 * hill.scale;
-        const h = (hill.far ? 260 : 170) * hill.scale;
-        ctx.fillStyle = hill.far ? theme.far : theme.near;
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2, baseY);
+    ctx.lineTo(x, baseY - h);
+    ctx.lineTo(x + w / 2, baseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.save();
+    ctx.clip();
+    paintRelief(ctx, x - w, baseY - h, w * 2, h);
+    ctx.restore();
 
-        // Stalagmite from the floor
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.35, topY);
+    ctx.lineTo(x + w * 0.1, topY + h * 0.75);
+    ctx.lineTo(x + w * 0.45, topY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.save();
+    ctx.clip();
+    paintRelief(ctx, x - w, topY, w * 2, h * 0.75);
+    ctx.restore();
+
+    // A wet gleam down the lit face of the nearer rock
+    if (!far) {
+        ctx.strokeStyle = 'rgba(160, 205, 225, 0.22)';
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(x - w / 2, baseY);
-        ctx.lineTo(x, baseY - h);
-        ctx.lineTo(x + w / 2, baseY);
-        ctx.closePath();
-        ctx.fill();
-
-        // ...and its opposite hanging from the roof
-        const topY = -gameState.camera.y * factor;
-        ctx.beginPath();
-        ctx.moveTo(x - w * 0.35, topY);
-        ctx.lineTo(x + w * 0.1, topY + h * 0.75);
-        ctx.lineTo(x + w * 0.45, topY);
-        ctx.closePath();
-        ctx.fill();
+        ctx.moveTo(x - w * 0.06, baseY - h * 0.9);
+        ctx.lineTo(x - w * 0.3, baseY - h * 0.05);
+        ctx.stroke();
     }
     ctx.restore();
 }
@@ -6896,29 +7629,93 @@ function drawCaveWalls() {
 function drawCastlePillars() {
     const baseY = GROUND_Y - gameState.camera.y * 0.55;
 
+    backdropLayer(true, 0.2, (x, piece) => drawPillar(x, piece, baseY, true));
+    drawHaze(baseY, 0.8);
+    backdropLayer(false, 0.38, (x, piece) => drawPillar(x, piece, baseY, false));
+}
+
+function drawPillar(x, piece, baseY, far) {
+    const w = 110 * piece.scale;
+    const h = (far ? 300 : 220) * piece.scale;
+    const left = x - w / 2;
+
     ctx.save();
-    for (const hill of hillPositions) {
-        const factor = hill.far ? 0.2 : 0.38;
-        const x = hill.x - gameState.camera.x * factor;
-        if (x < -300 || x > view.w + 300) continue;
+    ctx.fillStyle = far ? theme.far : theme.near;
+    ctx.fillRect(left, baseY - h, w, h);
 
-        const w = 110 * hill.scale;
-        const h = (hill.far ? 300 : 220) * hill.scale;
-        ctx.fillStyle = hill.far ? theme.far : theme.near;
-        ctx.fillRect(x - w / 2, baseY - h, w, h);
-
-        // Battlements along the top
-        for (let i = 0; i < 3; i++) {
-            ctx.fillRect(x - w / 2 + i * (w / 3), baseY - h - 12, w / 5, 12);
-        }
-        // Arrow slit
-        ctx.fillStyle = 'rgba(255, 150, 60, 0.35)';
-        ctx.fillRect(x - 4, baseY - h * 0.6, 8, 30);
+    // Battlements along the top
+    for (let i = 0; i < 3; i++) {
+        ctx.fillRect(left + i * (w / 3), baseY - h - 12, w / 5, 12);
     }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, baseY - h, w, h);
+    ctx.clip();
+    paintRelief(ctx, left, baseY - h, w, h);
+
+    // Coursed stone, so a buttress reads as masonry and not as a bar
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.lineWidth = 1;
+    for (let cy = baseY - h + 24; cy < baseY; cy += 24) {
+        ctx.beginPath();
+        ctx.moveTo(left, cy);
+        ctx.lineTo(left + w, cy);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    drawArrowSlit(x, baseY - h * 0.6);
+    ctx.restore();
+}
+
+/** A lit window, with the fire behind it spilling onto the stone. */
+function drawArrowSlit(x, y) {
+    const glow = ctx.createRadialGradient(x, y + 15, 2, x, y + 15, 34);
+    glow.addColorStop(0, 'rgba(255, 170, 70, 0.45)');
+    glow.addColorStop(1, 'rgba(255, 120, 30, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(x - 34, y - 19, 68, 68);
+
+    ctx.fillStyle = 'rgba(255, 190, 110, 0.75)';
+    ctx.fillRect(x - 4, y, 8, 30);
+}
+
+/**
+ * Banks of cloud stacked along the horizon. The sky levels have no landscape
+ * to put behind them, and without something out there at a distance the height
+ * you are playing at does not read at all.
+ */
+function drawCloudBank() {
+    const horizon = GROUND_Y - gameState.camera.y * 0.5;
+
+    backdropLayer(true, 0.12, (x, piece) => drawBank(x, piece, horizon - 40, true));
+    drawHaze(horizon, 0.9);
+    backdropLayer(false, 0.26, (x, piece) => drawBank(x, piece, horizon + 10, false));
+}
+
+function drawBank(x, piece, baseY, far) {
+    const w = 320 * piece.scale;
+    const h = (far ? 44 : 32) * piece.scale;
+
+    // Low and wide, in overlapping lobes. A single tall dome on the horizon
+    // reads as a hill, which is the one thing it must not be up here.
+    ctx.save();
+    ctx.fillStyle = far ? theme.far : theme.near;
+    ctx.beginPath();
+    ctx.ellipse(x, baseY, w * 0.42, h, 0, Math.PI, 0);
+    ctx.ellipse(x - w * 0.34, baseY, w * 0.26, h * 0.6, 0, Math.PI, 0);
+    ctx.ellipse(x + w * 0.36, baseY, w * 0.24, h * 0.7, 0, Math.PI, 0);
+    ctx.ellipse(x + w * 0.12, baseY, w * 0.3, h * 0.82, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.clip();
+    paintRelief(ctx, x - w, baseY - h, w * 2, h);
     ctx.restore();
 }
 
 function drawClouds() {
+    const style = theme.cloudStyle || 'puff';
+
     ctx.save();
     ctx.fillStyle = theme.clouds;
 
@@ -6930,12 +7727,8 @@ function drawClouds() {
             ctx.save();
             ctx.translate(x, y);
             ctx.scale(cloud.scale, cloud.scale);
-            ctx.beginPath();
-            ctx.arc(0, 0, 20, 0, Math.PI * 2);
-            ctx.arc(25, 2, 26, 0, Math.PI * 2);
-            ctx.arc(54, 0, 20, 0, Math.PI * 2);
-            ctx.arc(28, -14, 21, 0, Math.PI * 2);
-            ctx.fill();
+            if (style === 'smoke') drawSmokeBody();
+            else drawCloudBody(style);
             ctx.restore();
         }
 
@@ -6943,6 +7736,48 @@ function drawClouds() {
         if (cloud.x < -200) cloud.x = CONFIG.WORLD_WIDTH + 100;
     }
 
+    ctx.restore();
+}
+
+/**
+ * Drawn at the origin, for a caller that has already moved and scaled to where
+ * this cloud is. A 'wisp' stays flat - thin high cloud has no underside to
+ * see - while a puffy one is modelled, bright on top and shaded beneath.
+ */
+function drawCloudBody(style) {
+    ctx.beginPath();
+    ctx.arc(0, 0, 20, 0, Math.PI * 2);
+    ctx.arc(25, 2, 26, 0, Math.PI * 2);
+    ctx.arc(54, 0, 20, 0, Math.PI * 2);
+    ctx.arc(28, -14, 21, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (style === 'wisp') return;
+
+    ctx.save();
+    ctx.clip();
+    paintRelief(ctx, -30, -40, 120, 74);
+    ctx.restore();
+}
+
+/** What passes for cloud over a castle: soot, with no edge to speak of. */
+function drawSmokeBody() {
+    const plume = cachedGradient('smoke', () => {
+        const g = ctx.createRadialGradient(0, 0, 2, 0, 0, 40);
+        g.addColorStop(0, 'rgba(70, 38, 30, 0.55)');
+        g.addColorStop(1, 'rgba(70, 38, 30, 0)');
+        return g;
+    });
+
+    ctx.save();
+    ctx.fillStyle = plume;
+    for (const [px, py, scale] of [[0, 0, 1], [34, -8, 0.8], [58, 4, 0.9]]) {
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.scale(scale, scale);
+        ctx.fillRect(-40, -40, 80, 80);
+        ctx.restore();
+    }
     ctx.restore();
 }
 
@@ -7275,7 +8110,7 @@ async function startGame(mode) {
         ['start-screen', 'game-over-screen', 'out-of-lives-screen', 'pause-screen']
             .forEach(id => setScreenVisible(id, false));
 
-        initClouds();
+        initBackdrop();
         initLevel();
         player.hasUsedContinue = false;
 
@@ -7537,7 +8372,8 @@ const muteButton = document.getElementById('btn-mute');
 if (muteButton) muteButton.textContent = gameState.muted ? '🔇' : '🔊';
 
 setupTouchControls();
-initClouds();
+resizeCanvas();   // Sizes the viewport; initBackdrop() below fills it.
+initBackdrop();
 updateHUD();
 // The start screen is up on load, so hide the in-game chrome behind it.
 document.body.classList.toggle('menu-open', !!document.querySelector('.screen:not(.hidden)'));
